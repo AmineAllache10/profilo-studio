@@ -1,0 +1,31 @@
+venv/
+__pycache__/
+*.pyc
+scripts/__pycache__/
+
+data_raw/*
+!data_raw/.gitkeep
+
+data_processed/*
+!data_processed/.gitkeep
+
+results/*
+!results/.gitkeep
+
+.cache_profilo/
+
+# Images et dossiers supprimés du repo
+images_ok/
+images_pb/
+classification/
+
+# Streamlit cache
+.streamlit/
+
+# fichiers système
+.DS_Store
+Thumbs.db
+
+
+data_raw/*
+!data_raw/.gitkeep
