@@ -5,3 +5,5 @@ matplotlib
 pyarrow
 scipy
 scikit-image
+google-api-python-client
+google-auth

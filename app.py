@@ -1,8 +1,5 @@
 # app.py
 # Streamlit "Studio Profilo" V2 (modulaire) : inventaire, visionneuse, manquants, comparaison, rapport
-# Dépendances: streamlit numpy pandas matplotlib
-# Optionnel: scipy (fill nearest), scikit-image (SSIM)
-# Cache disque inventaire: nécessite parquet -> pip install pyarrow (ou fastparquet)
 
 import os
 import io
@@ -14,153 +11,73 @@ import pandas as pd
 import streamlit as st
 from matplotlib.figure import Figure
 
-from core.io_xyz import read_xyz_points
 from core.grid import GridResult, to_grid
 from core.missing import fill_missing
 from core.metrics import compare_metrics
-from viz.plots import fig_heatmap, fig_mask, fig_profile_mean
 from core.analysis_sillons import analyse_sillons_from_grid
+from core.inventory import (
+    build_inventory_local,
+    build_inventory_drive,
+    clear_inventory_cache,
+    read_xyz_points_cached,
+)
+
+from core.io_drive import get_drive_service, download_drive_file_to_temp
+from core.io_xyz import read_xyz_points
+
+from viz.plots import fig_heatmap, fig_mask
 from viz.plots import fig_profiles_sample, fig_profile_band_mean
 
 
 # -----------------------------
 # Config Streamlit
 # -----------------------------
-st.set_page_config(page_title="Profilo Studio V1", layout="wide")
+st.set_page_config(page_title="Profilo Studio", layout="wide")
+
+DRIVE_FOLDER_ID = "1PBtZj_Uc927MybfWwWP-kdHULsgXpCwF"
+service = get_drive_service(dict(st.secrets["gcp"]))
 
 
-# -----------------------------
-# Helpers: scan fichiers
-# -----------------------------
-def find_xyz_files(root_dir: str) -> list[str]:
-    xyz_files: list[str] = []
-    for dirpath, _, filenames in os.walk(root_dir):
-        for fn in filenames:
-            if fn.lower().endswith(".xyz"):
-                xyz_files.append(os.path.join(dirpath, fn))
-    xyz_files.sort()
-    return xyz_files
 
+def load_grid_or_scatter(row: pd.Series) -> tuple[pd.DataFrame, GridResult]:
+    source = str(row.get("source", "local"))
 
-# -----------------------------
-# Cache Streamlit (lecture xyz)
-# -----------------------------
-@st.cache_data(show_spinner=False)
-def read_xyz_points_cached(path: str) -> pd.DataFrame:
-    # FULL READ
-    return read_xyz_points(path)
+    if source == "drive":
+        file_id = str(row["file_id"])
+        tmp_path = download_drive_file_to_temp(service, file_id, suffix=".xyz")
+        try:
+            df = read_xyz_points(tmp_path)
+            grid = to_grid(df)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return df, grid
 
-
-def load_grid_or_scatter(path: str) -> tuple[pd.DataFrame, GridResult]:
+    path = str(row["chemin"])
     df = read_xyz_points_cached(path)
-    grid = to_grid(df)  # pivot_table inside -> FULL
+    grid = to_grid(df)
     return df, grid
-
-
-# -----------------------------
-# Cache disque inventaire (évite rescans)
-# -----------------------------
-CACHE_DIR = ".cache_profilo"
-CACHE_FILE = os.path.join(CACHE_DIR, "inventory_cache.parquet")
-
-
-def _file_sig(path: str) -> tuple[int, int]:
-    """Signature rapide d’un fichier (mtime_ns, size) pour détecter les modifs."""
-    stt = os.stat(path)
-    return (int(stt.st_mtime_ns), int(stt.st_size))
-
-
-def _load_cache_df() -> pd.DataFrame:
-    if os.path.exists(CACHE_FILE):
-        try:
-            return pd.read_parquet(CACHE_FILE)
-        except Exception:
-            return pd.DataFrame()
-    return pd.DataFrame()
-
-
-def _save_cache_df(df: pd.DataFrame) -> None:
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    tmp = CACHE_FILE + ".tmp"
-    df.to_parquet(tmp, index=False)
-    os.replace(tmp, CACHE_FILE)
-
-
-def _clear_cache() -> None:
-    if os.path.exists(CACHE_FILE):
-        try:
-            os.remove(CACHE_FILE)
-        except Exception:
-            pass
-
-
-# -----------------------------
-# Inventaire (FULL READ + to_grid) mais incrémental grâce au cache disque
-# -----------------------------
-@st.cache_data(show_spinner=False)
-def build_inventory(root_dir: str) -> pd.DataFrame:
-    files = find_xyz_files(root_dir)
-
-    cache_df = _load_cache_df()
-    if not cache_df.empty:
-        cache_df = cache_df.drop_duplicates(subset=["chemin"], keep="last")
-        cache_map = {row["chemin"]: row for _, row in cache_df.iterrows()}
-    else:
-        cache_map = {}
-
-    rows: list[dict] = []
-    updated_any = False
-
-    for p in files:
-        base = os.path.basename(p)
-        mtime_ns, size = _file_sig(p)
-
-        # 1) si déjà en cache et pas modifié -> on reprend direct
-        if p in cache_map:
-            r = cache_map[p]
-            if int(r.get("mtime_ns", -1)) == mtime_ns and int(r.get("size", -1)) == size:
-                rows.append(dict(r))
-                continue
-
-        # 2) sinon: FULL READ + to_grid() (donc pivot_table) comme tu veux
-        df = read_xyz_points_cached(p)  # FULL
-        grid = to_grid(df)              # FULL (pivot_table)
-
-        row = {
-            "fichier": base,
-            "chemin": p,
-            "mtime_ns": mtime_ns,
-            "size": size,
-            "n_points": int(df.shape[0]),
-            "is_grid": bool(grid.is_grid),
-            "nx": int(grid.nx),
-            "ny": int(grid.ny),
-            "missing_rate": float(grid.missing_rate),
-            "z_min": float(np.nanmin(grid.Z)) if grid.Z.size else np.nan,
-            "z_max": float(np.nanmax(grid.Z)) if grid.Z.size else np.nan,
-            "z_std": float(np.nanstd(grid.Z)) if grid.Z.size else np.nan,
-        }
-        rows.append(row)
-        cache_map[p] = row
-        updated_any = True
-
-    out = pd.DataFrame(rows)
-
-    # 3) sauvegarde cache disque
-    if updated_any:
-        _save_cache_df(pd.DataFrame(list(cache_map.values())))
-
-    return out
 
 
 # -----------------------------
 # UI
 # -----------------------------
-st.title("Profilo Studio V1")
+st.title("Profilo Studio")
 
 with st.sidebar:
     st.header("Dataset")
-    root = st.text_input("Chemin dossier data", value="data")
+
+    source_mode = st.selectbox(
+        "Source des données",
+        options=["Google Drive", "Local"],
+        index=0,
+    )
+
+    root = ""
+    if source_mode == "Local":
+        root = st.text_input("Chemin dossier data", value="data")
 
     cbtn1, cbtn2 = st.columns(2)
     with cbtn1:
@@ -169,8 +86,7 @@ with st.sidebar:
         reset_cache = st.button("Reset cache")
 
     if reset_cache:
-        _clear_cache()
-        st.cache_data.clear()
+        clear_inventory_cache()
         st.session_state.inventory = None
         st.success("Cache inventaire supprimé.")
 
@@ -182,21 +98,30 @@ if "inventory" not in st.session_state:
     st.session_state.inventory = None
 
 if do_scan:
-    if not os.path.exists(root):
-        st.error("Chemin invalide: le dossier n'existe pas.")
+    if source_mode == "Local":
+        if not os.path.exists(root):
+            st.error("Chemin invalide: le dossier n'existe pas.")
+        else:
+            with st.spinner("Inventaire local..."):
+                inv = build_inventory_local(root)
+            st.session_state.inventory = inv
     else:
-        with st.spinner("Inventaire "):
-            inv = build_inventory(root)
+        with st.spinner("Inventaire Google Drive..."):
+            inv = build_inventory_drive(service, DRIVE_FOLDER_ID)
         st.session_state.inventory = inv
-
+        
 inv = st.session_state.inventory
 if inv is None:
     st.info("Renseigne le dossier puis clique Scanner.")
     st.stop()
 
-# Filtres (plus de OK/ERREUR)
+# Filtres
 with st.sidebar:
-    grid_filter = st.multiselect("Type", options=["Grille", "Hors-grille"], default=["Grille", "Hors-grille"])
+    grid_filter = st.multiselect(
+        "Type",
+        options=["Grille", "Hors-grille"],
+        default=["Grille", "Hors-grille"],
+    )
     only_missing = st.checkbox("Afficher seulement fichiers avec manquants > 0", value=False)
     search = st.text_input("Recherche (nom contient)", value="")
 
@@ -212,14 +137,24 @@ if only_missing:
 if search.strip():
     f = f[f["fichier"].str.contains(search.strip(), case=False, na=False)]
 
-# Compteurs top
+# Compteurs
 colA, colB, colC, colD = st.columns(4)
 colA.metric("Fichiers (filtrés)", int(f.shape[0]))
 colB.metric("Fichiers en grille", int((f["is_grid"] == True).sum()))
 colC.metric("Fichiers hors-grille", int((f["is_grid"] == False).sum()))
 colD.metric("Avec manquants (>0)", int((f["missing_rate"].fillna(0.0) > 0.0).sum()))
 
-tabs = st.tabs(["Inventaire", "Visionneuse", "Données manquantes", "Comparer", "Analyse profils", "Analyse sillons", "Rapport"])
+tabs = st.tabs(
+    [
+        "Inventaire",
+        "Visionneuse",
+        "Données manquantes",
+        "Comparer",
+        "Analyse profils",
+        "Analyse sillons",
+        "Rapport",
+    ]
+)
 
 # -----------------------------
 # Tab 1: Inventaire
@@ -240,37 +175,60 @@ with tabs[0]:
         mime="text/csv",
     )
 
-
 # -----------------------------
 # Sélections globales
 # -----------------------------
-file_options = f["chemin"].tolist()
+filtered_inv = f.reset_index(drop=True)
 
 with st.sidebar:
-    if len(file_options) == 0:
+    if filtered_inv.shape[0] == 0:
         st.warning("Aucun fichier dans le filtre.")
-        sel_path = None
-        selA = None
-        selB = None
+        sel_row = None
+        selA_row = None
+        selB_row = None
     else:
-        sel_path = st.selectbox("Fichier actif (Visionneuse/Manquants)", options=file_options, index=0)
-        st.caption("Comparer")
-        selA = st.selectbox("Fichier A", options=file_options, index=0, key="selA")
-        selB = st.selectbox("Fichier B", options=file_options, index=min(1, len(file_options) - 1), key="selB")
+        indices = list(range(filtered_inv.shape[0]))
 
+        sel_idx = st.selectbox(
+            "Fichier actif (Visionneuse/Manquants)",
+            options=indices,
+            index=0,
+            format_func=lambda i: filtered_inv.iloc[i]["chemin"],
+        )
+        sel_row = filtered_inv.iloc[sel_idx]
+
+        st.caption("Comparer")
+
+        selA_idx = st.selectbox(
+            "Fichier A",
+            options=indices,
+            index=0,
+            key="selA",
+            format_func=lambda i: filtered_inv.iloc[i]["chemin"],
+        )
+        selA_row = filtered_inv.iloc[selA_idx]
+
+        selB_idx = st.selectbox(
+            "Fichier B",
+            options=indices,
+            index=min(1, len(indices) - 1),
+            key="selB",
+            format_func=lambda i: filtered_inv.iloc[i]["chemin"],
+        )
+        selB_row = filtered_inv.iloc[selB_idx]
 
 # -----------------------------
 # Tab 2: Visionneuse
 # -----------------------------
 with tabs[1]:
     st.subheader("Visionneuse")
-    if sel_path is None:
+    if sel_row is None:
         st.stop()
 
     left, right = st.columns([2, 1])
 
     with st.spinner("Lecture complète et construction de la grille..."):
-        dfp, gridp = load_grid_or_scatter(sel_path)
+        dfp, gridp = load_grid_or_scatter(sel_row)
 
     with left:
         if gridp.is_grid:
@@ -289,7 +247,7 @@ with tabs[1]:
 
     with right:
         st.write("**Fichier**")
-        st.code(sel_path, language="text")
+        st.code(str(sel_row["chemin"]), language="text")
         st.write("**Résumé**")
         st.write(f"n_points: {dfp.shape[0]}")
         st.write(f"is_grid: {gridp.is_grid}")
@@ -312,19 +270,23 @@ with tabs[1]:
             img_buf = io.BytesIO()
             fig_out = fig_heatmap(gridp.Z, title="Surface (Z)")
             fig_out.savefig(img_buf, format="png")
-            st.download_button("Exporter image PNG", data=img_buf.getvalue(), file_name="surface.png", mime="image/png")
-
+            st.download_button(
+                "Exporter image PNG",
+                data=img_buf.getvalue(),
+                file_name="surface.png",
+                mime="image/png",
+            )
 
 # -----------------------------
 # Tab 3: Données manquantes
 # -----------------------------
 with tabs[2]:
     st.subheader("Données manquantes")
-    if sel_path is None:
+    if sel_row is None:
         st.stop()
 
     with st.spinner("Lecture complète..."):
-        dfm, gridm = load_grid_or_scatter(sel_path)
+        dfm, gridm = load_grid_or_scatter(sel_row)
 
     if not gridm.is_grid:
         st.warning("Ce fichier ne ressemble pas à une grille régulière. Module manquants limité.")
@@ -356,19 +318,18 @@ with tabs[2]:
     else:
         st.info("Active 'Appliquer remplissage' pour voir l'APRES.")
 
-
 # -----------------------------
 # Tab 4: Comparer
 # -----------------------------
 with tabs[3]:
     st.subheader("Comparer")
-    if selA is None or selB is None:
+    if selA_row is None or selB_row is None:
         st.stop()
 
     with st.spinner("Lecture complète A..."):
-        _, gA = load_grid_or_scatter(selA)
+        _, gA = load_grid_or_scatter(selA_row)
     with st.spinner("Lecture complète B..."):
-        _, gB = load_grid_or_scatter(selB)
+        _, gB = load_grid_or_scatter(selB_row)
 
     if not (gA.is_grid and gB.is_grid):
         st.warning("Comparaison complète prévue pour deux grilles.")
@@ -382,12 +343,17 @@ with tabs[3]:
     mcol, icol = st.columns([1, 2])
     with mcol:
         st.write("**Fichier A**")
-        st.code(selA, language="text")
+        st.code(str(selA_row["chemin"]), language="text")
         st.write("**Fichier B**")
-        st.code(selB, language="text")
+        st.code(str(selB_row["chemin"]), language="text")
 
         fill_cmp = st.checkbox("Remplir trous avant comparaison", value=False)
-        method_cmp = st.selectbox("Méthode remplissage", options=["Nearest", "Interpolate"], index=0, key="cmp_fill_method")
+        method_cmp = st.selectbox(
+            "Méthode remplissage",
+            options=["Nearest", "Interpolate"],
+            index=0,
+            key="cmp_fill_method",
+        )
 
         A2, B2 = A.copy(), B.copy()
         if fill_cmp:
@@ -407,14 +373,16 @@ with tabs[3]:
         with c3:
             st.pyplot(fig_heatmap(np.abs(A2 - B2), title="|A-B|"))
 
-
+# -----------------------------
+# Tab 5: Analyse profils
+# -----------------------------
 with tabs[4]:
     st.subheader("Analyse profils (1D)")
-    if sel_path is None:
+    if sel_row is None:
         st.stop()
 
     with st.spinner("Lecture complète..."):
-        dfP, gP = load_grid_or_scatter(sel_path)
+        dfP, gP = load_grid_or_scatter(sel_row)
 
     if not gP.is_grid:
         st.warning("Analyse profils disponible seulement si fichier en grille.")
@@ -422,7 +390,11 @@ with tabs[4]:
 
     cA, cB = st.columns([1, 2])
     with cA:
-        axis = st.selectbox("Direction des profils", options=["Profils en X (lignes Y)", "Profils en Y (colonnes X)"], index=0)
+        axis = st.selectbox(
+            "Direction des profils",
+            options=["Profils en X (lignes Y)", "Profils en Y (colonnes X)"],
+            index=0,
+        )
         axis_id = 0 if axis.startswith("Profils en X") else 1
         n_lines = st.slider("Nombre de profils affichés", 3, 30, 10, 1)
         ref0 = st.checkbox("Référence surface = 0 (soustraire max)", value=True)
@@ -435,15 +407,16 @@ with tabs[4]:
         st.pyplot(fig_profiles_sample(Zuse, n_lines=n_lines, axis=axis_id, title="Profils individuels"))
         st.pyplot(fig_profile_band_mean(Zuse, axis=axis_id, title="Profil moyen + dispersion", ref_to_zero=False))
 
-
-
+# -----------------------------
+# Tab 6: Analyse sillons
+# -----------------------------
 with tabs[5]:
     st.subheader("Analyse sillons (FFT + modèle créneau)")
-    if sel_path is None:
+    if sel_row is None:
         st.stop()
 
     with st.spinner("Lecture complète..."):
-        dfS, gS = load_grid_or_scatter(sel_path)
+        dfS, gS = load_grid_or_scatter(sel_row)
 
     if not gS.is_grid:
         st.warning("Analyse sillons disponible seulement si fichier en grille.")
@@ -495,48 +468,53 @@ with tabs[5]:
         ax.set_title("Profil vs modèle")
         ax.set_xlabel("index X")
         ax.set_ylabel("profondeur (µm)")
-
         ax.grid(True)
         ax.legend()
         fig.tight_layout()
         st.pyplot(fig)
 
-
 # -----------------------------
-# Tab 5: Rapport
+# Tab 7: Rapport
 # -----------------------------
 with tabs[6]:
     st.subheader("Rapport (exports)")
 
-    if sel_path is None:
+    if sel_row is None:
         st.stop()
 
     do_fill_rep = st.checkbox("Inclure surface après remplissage trous", value=False, key="rep_fill")
-    method_rep = st.selectbox("Méthode remplissage", options=["Nearest", "Interpolate"], index=0, key="rep_fill_method")
+    method_rep = st.selectbox(
+        "Méthode remplissage",
+        options=["Nearest", "Interpolate"],
+        index=0,
+        key="rep_fill_method",
+    )
 
     if st.button("Générer ZIP rapport"):
         with st.spinner("Génération..."):
             with tempfile.TemporaryDirectory() as td:
                 f.to_csv(os.path.join(td, "inventaire_filtre.csv"), index=False)
 
-                dfR, gR = load_grid_or_scatter(sel_path)
-                base = os.path.splitext(os.path.basename(sel_path))[0]
+                dfR, gR = load_grid_or_scatter(sel_row)
+                base = os.path.splitext(os.path.basename(str(sel_row["chemin"])))[0]
 
                 if gR.is_grid:
                     statsR = pd.DataFrame(
-                        [{
-                            "fichier": os.path.basename(sel_path),
-                            "chemin": sel_path,
-                            "n_points": int(dfR.shape[0]),
-                            "is_grid": bool(gR.is_grid),
-                            "nx": int(gR.nx),
-                            "ny": int(gR.ny),
-                            "missing_rate": float(gR.missing_rate),
-                            "z_min": float(np.nanmin(gR.Z)),
-                            "z_max": float(np.nanmax(gR.Z)),
-                            "z_mean": float(np.nanmean(gR.Z)),
-                            "z_std": float(np.nanstd(gR.Z)),
-                        }]
+                        [
+                            {
+                                "fichier": os.path.basename(str(sel_row["chemin"])),
+                                "chemin": str(sel_row["chemin"]),
+                                "n_points": int(dfR.shape[0]),
+                                "is_grid": bool(gR.is_grid),
+                                "nx": int(gR.nx),
+                                "ny": int(gR.ny),
+                                "missing_rate": float(gR.missing_rate),
+                                "z_min": float(np.nanmin(gR.Z)),
+                                "z_max": float(np.nanmax(gR.Z)),
+                                "z_mean": float(np.nanmean(gR.Z)),
+                                "z_std": float(np.nanstd(gR.Z)),
+                            }
+                        ]
                     )
                     statsR.to_csv(os.path.join(td, f"{base}_stats.csv"), index=False)
 
