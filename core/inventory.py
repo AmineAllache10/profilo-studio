@@ -7,10 +7,9 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from core.io_xyz import read_xyz_points
-from core.grid import to_grid
-from core.io_drive import list_xyz_files_in_folder, download_drive_file_to_temp
-
+from .io_xyz import read_xyz_points
+from .grid import to_grid
+from .io_drive import list_xyz_files_in_folder, download_drive_file_to_temp
 
 # -----------------------------
 # Cache disque inventaire
