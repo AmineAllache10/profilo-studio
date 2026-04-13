@@ -13,12 +13,13 @@ from matplotlib.figure import Figure
 
 from core.grid import GridResult, to_grid
 from core.missing import fill_missing
-from core.metrics import compare_metrics
 from core.analysis_sillons import analyse_sillons_from_grid
+from core.analysis_recalage import analyse_recalage
 from core.inventory import (
     build_inventory_local,
     build_inventory_drive,
     clear_inventory_cache,
+    load_inventory_from_cache,
     read_xyz_points_cached,
 )
 
@@ -66,6 +67,16 @@ def load_grid_or_scatter(row: pd.Series) -> tuple[pd.DataFrame, GridResult]:
 # -----------------------------
 st.title("Profilo Studio")
 
+# -----------------------------
+# Session state init
+# -----------------------------
+if "inventory" not in st.session_state:
+    st.session_state.inventory = None
+if "source_mode" not in st.session_state:
+    st.session_state.source_mode = "Google Drive"
+if "local_root" not in st.session_state:
+    st.session_state.local_root = ""
+
 with st.sidebar:
     st.header("Dataset")
 
@@ -73,41 +84,112 @@ with st.sidebar:
         "Source des données",
         options=["Google Drive", "Local"],
         index=0,
+        key="source_mode_select",
     )
+    st.session_state.source_mode = source_mode
 
-    root = ""
+    # -----------------------------
+    # Mode Local : explorateur de dossiers
+    # -----------------------------
     if source_mode == "Local":
-        root = st.text_input("Chemin dossier data", value="data")
+        st.caption("Navigue jusqu'au dossier contenant tes fichiers .xyz")
+
+        # Zone de saisie du chemin
+        typed_path = st.text_input(
+            "Chemin du dossier",
+            value=st.session_state.local_root or os.path.expanduser("~"),
+            key="local_path_input",
+        )
+
+        # Autocomplétion : liste les sous-dossiers du chemin saisi
+        if typed_path and os.path.isdir(typed_path):
+            try:
+                subdirs = sorted([
+                    d for d in os.listdir(typed_path)
+                    if os.path.isdir(os.path.join(typed_path, d))
+                    and not d.startswith(".")
+                ])
+                if subdirs:
+                    chosen = st.selectbox(
+                        "Sous-dossiers disponibles",
+                        options=["(rester ici)"] + subdirs,
+                        index=0,
+                        key="subdir_select",
+                    )
+                    if chosen != "(rester ici)":
+                        typed_path = os.path.join(typed_path, chosen)
+                        st.session_state.local_root = typed_path
+
+                # Compter les .xyz dans le dossier choisi
+                n_xyz = sum(
+                    1 for _, _, fnames in os.walk(typed_path)
+                    for fn in fnames if fn.lower().endswith(".xyz")
+                )
+                st.caption(f"`{typed_path}`  —  **{n_xyz} fichiers .xyz** trouvés")
+                root = typed_path
+                st.session_state.local_root = typed_path
+            except PermissionError:
+                st.warning("Accès refusé à ce dossier.")
+                root = typed_path
+        else:
+            st.warning("Chemin invalide ou inaccessible.")
+            root = typed_path
+    else:
+        root = ""
+
+    st.divider()
 
     cbtn1, cbtn2 = st.columns(2)
     with cbtn1:
-        do_scan = st.button("Scanner")
+        do_scan = st.button("Scanner", use_container_width=True)
     with cbtn2:
-        reset_cache = st.button("Reset cache")
+        reset_cache = st.button("Reset cache", use_container_width=True)
 
     if reset_cache:
         clear_inventory_cache()
         st.session_state.inventory = None
-        st.success("Cache inventaire supprimé.")
+        st.success("Cache supprimé.")
 
     st.divider()
     st.header("Sélection")
     st.caption("Les filtres s'appliquent à l'inventaire.")
 
-if "inventory" not in st.session_state:
-    st.session_state.inventory = None
+# -----------------------------
+# Chargement auto du cache au démarrage
+# -----------------------------
+if st.session_state.inventory is None:
+    cached = load_inventory_from_cache(source_mode.lower().replace(" ", "_") if source_mode != "Google Drive" else "drive")
+    if cached is not None:
+        st.session_state.inventory = cached
 
+# -----------------------------
+# Scan manuel
+# -----------------------------
 if do_scan:
     if source_mode == "Local":
-        if not os.path.exists(root):
-            st.error("Chemin invalide: le dossier n'existe pas.")
+        if not root or not os.path.exists(root):
+            st.error("Chemin invalide : le dossier n'existe pas.")
         else:
-            with st.spinner("Inventaire local..."):
-                inv = build_inventory_local(root)
+            progress_bar = st.progress(0, text="Préparation du scan...")
+
+            def local_progress(i, total, fname):
+                if total > 0:
+                    pct = int((i / total) * 100)
+                    progress_bar.progress(pct, text=f"Scan ({i}/{total}) : {fname}")
+
+            inv = build_inventory_local(root, progress_cb=local_progress)
+            progress_bar.progress(100, text="Scan termine")
             st.session_state.inventory = inv
     else:
-        with st.spinner("Inventaire Google Drive..."):
-            inv = build_inventory_drive(service, DRIVE_FOLDER_ID)
+        progress_bar = st.progress(0, text="Connexion Google Drive...")
+
+        def drive_progress(i, total, fname):
+            if total > 0:
+                pct = int((i / total) * 100)
+                progress_bar.progress(pct, text=f"Téléchargement ({i}/{total}) : {fname}")
+
+        inv = build_inventory_drive(service, DRIVE_FOLDER_ID, progress_cb=drive_progress)
+        progress_bar.progress(100, text="Scan termine")
         st.session_state.inventory = inv
         
 inv = st.session_state.inventory
@@ -149,7 +231,7 @@ tabs = st.tabs(
         "Inventaire",
         "Visionneuse",
         "Données manquantes",
-        "Comparer",
+        "Recalage",
         "Analyse profils",
         "Analyse sillons",
         "Rapport",
@@ -185,8 +267,6 @@ with st.sidebar:
     if filtered_inv.shape[0] == 0:
         st.warning("Aucun fichier dans le filtre.")
         sel_row = None
-        selA_row = None
-        selB_row = None
     else:
         indices = list(range(filtered_inv.shape[0]))
 
@@ -198,25 +278,7 @@ with st.sidebar:
         )
         sel_row = filtered_inv.iloc[sel_idx]
 
-        st.caption("Comparer")
 
-        selA_idx = st.selectbox(
-            "Fichier A",
-            options=indices,
-            index=0,
-            key="selA",
-            format_func=lambda i: filtered_inv.iloc[i]["chemin"],
-        )
-        selA_row = filtered_inv.iloc[selA_idx]
-
-        selB_idx = st.selectbox(
-            "Fichier B",
-            options=indices,
-            index=min(1, len(indices) - 1),
-            key="selB",
-            format_func=lambda i: filtered_inv.iloc[i]["chemin"],
-        )
-        selB_row = filtered_inv.iloc[selB_idx]
 
 # -----------------------------
 # Tab 2: Visionneuse
@@ -251,9 +313,50 @@ with tabs[1]:
                     st.pyplot(fig_heatmap(gridp.Z, title="Semelle mesurée"))
 
                 with col2:
-                    Z_model = np.sign(np.sin(np.linspace(0, 20, gridp.Z.shape[1])))
-                    Z_model = np.tile(Z_model, (gridp.Z.shape[0], 1))
-                    st.pyplot(fig_heatmap(Z_model, title="Modèle diamant (théorique)"))
+                    # Modèle théorique PMMA : créneau à la même résolution que Z
+                    ny_g, nx_g = gridp.Z.shape
+
+                    # Période via FFT sur profil moyen (même logique que recalage)
+                    profil_tmp = np.nanmean(gridp.Z, axis=0)
+                    mask_tmp = np.isfinite(profil_tmp)
+                    profil_tmp = profil_tmp[mask_tmp]
+
+                    if profil_tmp.size > 10:
+                        p = profil_tmp - np.mean(profil_tmp)
+                        fft_tmp = np.fft.rfft(p)
+                        fft_tmp[0] = 0
+                        freqs_tmp = np.fft.rfftfreq(len(p), d=1.0)
+                        with np.errstate(divide="ignore", invalid="ignore"):
+                            periods_tmp = 1.0 / freqs_tmp
+                        band = np.isfinite(periods_tmp) & (periods_tmp >= 10) & (periods_tmp <= 300)
+                        if np.any(band):
+                            idx_b = np.where(band)[0]
+                            idx_peak = idx_b[int(np.argmax(np.abs(fft_tmp[idx_b])))]
+                            periode_px = max(4, int(round(periods_tmp[idx_peak])))
+                        else:
+                            periode_px = nx_g // 6
+                    else:
+                        periode_px = nx_g // 6
+
+                    largeur_px = max(2, periode_px // 2)
+
+                    # Créneau binaire : même shape que Z (ny_g x nx_g)
+                    # valeurs dans le même range que Z pour comparaison valable
+                    z_min = float(np.nanmin(gridp.Z))
+                    z_max = float(np.nanmax(gridp.Z))
+
+                    ligne_modele = np.zeros(nx_g, dtype=float)
+                    toggle = False
+                    for start in range(0, nx_g, largeur_px):
+                        end = min(start + largeur_px, nx_g)
+                        ligne_modele[start:end] = z_max if not toggle else z_min
+                        toggle = not toggle
+
+                    # Même grille que Z : motif répété sur toutes les lignes Y
+                    Z_modele = np.tile(ligne_modele, (ny_g, 1))
+
+                    st.pyplot(fig_heatmap(Z_modele, title="Modèle théorique (sillons PMMA)"))
+                    st.caption(f"Période détectée : {periode_px} px · Même échelle couleur que la mesure")
             else:
                 fig = Figure(figsize=(6.5, 4.5), dpi=120)
                 ax = fig.add_subplot(111)
@@ -367,68 +470,148 @@ with tabs[2]:
         st.info("Active 'Appliquer remplissage' pour voir l'APRES.")
 
 # -----------------------------
-# Tab 4: Comparer
+# Tab 4: Recalage
 # -----------------------------
 with tabs[3]:
-    st.subheader("Comparer")
+    st.subheader("Recalage")
     st.info("""
-            Comparaison :
+        Pipeline complète de recalage sur le fichier actif :
 
-            - Comparaison point à point des deux surfaces
-            - Carte |A - B| pour visualiser les écarts
-            - Calcul de métriques globales
+        1. Référence surface = 0 (max → 0)
+        2. Calibration spatiale (résolution µm/px)
+        3. Profil moyen + suppression de pente
+        4. FFT → détection de la période dominante
+        5. Modèle créneau (diamant) + alignement par corrélation
+        6. Métriques globales : Ra, Rq, Kurtosis (profil vs modèle)
+        7. Kurtosis ligne par ligne
+        8. Erreur L2 absolue et normalisée ligne par ligne
+        9. Erreurs relatives Ra / Rq / Kurtosis (profil mesuré vs modèle)
+    """)
 
-            Méthodes standards d’analyse de différence entre surfaces
-            """)
-    if selA_row is None or selB_row is None:
-        st.stop()
+    if sel_row is None:
+        st.info("Aucun fichier sélectionné.")
+    else:
+        rec_col, _ = st.columns([1, 3])
+        with rec_col:
+            ref0_rec = st.checkbox("Référence surface = 0", value=True, key="rec_ref0")
+            depth_pct_rec = st.slider("Percentile profondeur", 1.0, 20.0, 5.0, 0.5, key="rec_depth")
+            period_min_rec = st.number_input("Période min (px)", value=20, min_value=2, key="rec_pmin")
+            period_max_rec = st.number_input("Période max (px)", value=300, min_value=3, key="rec_pmax")
+            run_rec = st.button("Lancer recalage", key="run_recalage")
 
-    with st.spinner("Lecture complète A..."):
-        _, gA = load_grid_or_scatter(selA_row)
-    with st.spinner("Lecture complète B..."):
-        _, gB = load_grid_or_scatter(selB_row)
+        if run_rec:
+            try:
+                with st.spinner("Lecture + recalage en cours..."):
+                    _, g_rec = load_grid_or_scatter(sel_row)
+                    if not g_rec.is_grid:
+                        st.warning("Recalage disponible uniquement pour les fichiers en grille.")
+                        st.stop()
+                    res_rec = analyse_recalage(
+                        g_rec.Z,
+                        x_vals=g_rec.x_vals,
+                        ref_surface_zero=ref0_rec,
+                        depth_percentile=float(depth_pct_rec),
+                        period_min_px=int(period_min_rec),
+                        period_max_px=int(period_max_rec),
+                    )
+                st.session_state["recalage_res"] = res_rec
+            except Exception as e:
+                st.error(str(e))
 
-    if not (gA.is_grid and gB.is_grid):
-        st.warning("Comparaison complète prévue pour deux grilles.")
-        st.stop()
+        res_rec = st.session_state.get("recalage_res", None)
+        if res_rec is None:
+            st.info("Clique sur 'Lancer recalage'.")
+        else:
+            # ---- Paramètres détectés
+            st.subheader("Paramètres détectés")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Résolution (µm/px)", f"{res_rec['resolution_um_px']:.3f}")
+            col2.metric("Période (µm)", f"{res_rec['periode_um']:.1f}")
+            col3.metric("Largeur sillon (µm)", f"{res_rec['largeur_sillon_um']:.1f}")
+            col4.metric("Profondeur (µm)", f"{res_rec['profondeur_um']:.2f}")
 
-    ny = min(gA.Z.shape[0], gB.Z.shape[0])
-    nx = min(gA.Z.shape[1], gB.Z.shape[1])
-    A = gA.Z[:ny, :nx]
-    B = gB.Z[:ny, :nx]
+            # ---- Profil vs modèle
+            st.subheader("Profil moyen vs modèle créneau")
+            fig_pvm = Figure(figsize=(11, 4), dpi=120)
+            ax_pvm = fig_pvm.add_subplot(111)
+            ax_pvm.plot(
+                res_rec["profil_det"],
+                label=f"Profil mesuré  (Ra={res_rec['Ra']:.3f}, Rq={res_rec['Rq']:.3f}, K={res_rec['kurtosis_profil']:.2f})",
+            )
+            ax_pvm.plot(
+                res_rec["modele_aligne"], "--", color="orange",
+                label=f"Modèle créneau (Ra={res_rec['Ra_modele']:.3f}, Rq={res_rec['Rq_modele']:.3f}, K={res_rec['kurtosis_modele']:.2f})",
+            )
+            ax_pvm.set_xlabel("Index X")
+            ax_pvm.set_ylabel("Profondeur (µm)")
+            ax_pvm.set_title("Profil moyen vs modèle aligné")
+            ax_pvm.grid(True)
+            ax_pvm.legend()
+            fig_pvm.tight_layout()
+            st.pyplot(fig_pvm)
 
-    mcol, icol = st.columns([1, 2])
-    with mcol:
-        st.write("**Fichier A**")
-        st.code(str(selA_row["chemin"]), language="text")
-        st.write("**Fichier B**")
-        st.code(str(selB_row["chemin"]), language="text")
+            # ---- Métriques comparées
+            st.subheader("Métriques : profil vs modèle")
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.metric(
+                "Ra  mesuré / modèle (µm)",
+                f"{res_rec['Ra']:.3f} / {res_rec['Ra_modele']:.3f}",
+                delta=f"{res_rec['erreur_Ra_pct']:.1f} % d'écart",
+            )
+            mc2.metric(
+                "Rq  mesuré / modèle (µm)",
+                f"{res_rec['Rq']:.3f} / {res_rec['Rq_modele']:.3f}",
+                delta=f"{res_rec['erreur_Rq_pct']:.1f} % d'écart",
+            )
+            mc3.metric(
+                "Kurtosis moy / modèle",
+                f"{res_rec['kurtosis_moyenne']:.2f} / {res_rec['kurtosis_modele']:.2f}",
+                delta=f"{res_rec['erreur_kurtosis_pct']:.1f} % d'écart",
+            )
 
-        fill_cmp = st.checkbox("Remplir trous avant comparaison", value=False)
-        method_cmp = st.selectbox(
-            "Méthode remplissage",
-            options=["Nearest", "Interpolate"],
-            index=0,
-            key="cmp_fill_method",
-        )
+            st.divider()
 
-        A2, B2 = A.copy(), B.copy()
-        if fill_cmp:
-            A2 = fill_missing(A2, method_cmp)
-            B2 = fill_missing(B2, method_cmp)
+            # ---- Kurtosis + L2 côte à côte
+            left_k, right_k = st.columns(2)
 
-        metrics = compare_metrics(A2, B2)
-        st.write("**Métriques**")
-        st.write(metrics)
+            with left_k:
+                st.subheader("Kurtosis ligne par ligne")
+                st.write(f"Kurtosis moyen : **{res_rec['kurtosis_moyenne']:.3f}** ± {res_rec['kurtosis_std']:.3f}")
+                st.write(f"Lignes analysées : **{res_rec['n_lignes']}**")
+                fig_kurt = Figure(figsize=(6, 3), dpi=110)
+                ax_k = fig_kurt.add_subplot(111)
+                ax_k.plot(res_rec["kurtosis_lignes_arr"], color="steelblue", linewidth=0.8)
+                ax_k.axhline(
+                    res_rec["kurtosis_moyenne"], color="red", linestyle="--",
+                    label=f"Moy = {res_rec['kurtosis_moyenne']:.2f}",
+                )
+                ax_k.set_xlabel("Ligne Y")
+                ax_k.set_ylabel("Kurtosis")
+                ax_k.set_title("Kurtosis par ligne")
+                ax_k.grid(True)
+                ax_k.legend()
+                fig_kurt.tight_layout()
+                st.pyplot(fig_kurt)
 
-    with icol:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.pyplot(fig_heatmap(A2, title="A"))
-        with c2:
-            st.pyplot(fig_heatmap(B2, title="B"))
-        with c3:
-            st.pyplot(fig_heatmap(np.abs(A2 - B2), title="|A-B|"))
+            with right_k:
+                st.subheader("Erreur L2 ligne par ligne")
+                st.write(f"L2 absolue : **{res_rec['erreur_L2_moyenne']:.3f}** ± {res_rec['erreur_L2_std']:.3f} µm·√µm")
+                st.write(f"L2 normalisée : **{res_rec['L2_norm_moyenne']:.4f}** ± {res_rec['L2_norm_std']:.4f}")
+                fig_l2 = Figure(figsize=(6, 3), dpi=110)
+                ax_l2 = fig_l2.add_subplot(111)
+                ax_l2.plot(res_rec["erreurs_L2_arr"], color="darkorange", linewidth=0.8)
+                ax_l2.axhline(
+                    res_rec["erreur_L2_moyenne"], color="red", linestyle="--",
+                    label=f"Moy = {res_rec['erreur_L2_moyenne']:.3f}",
+                )
+                ax_l2.set_xlabel("Ligne Y")
+                ax_l2.set_ylabel("L2 (µm·√µm)")
+                ax_l2.set_title("Erreur L2 par ligne")
+                ax_l2.grid(True)
+                ax_l2.legend()
+                fig_l2.tight_layout()
+                st.pyplot(fig_l2)
+
 
 # -----------------------------
 # Tab 5: Analyse profils
@@ -680,10 +863,3 @@ with tabs[7]:
     st.write("- **FFT** : analyse des fréquences d’un signal")
     st.write("- **Sillons** : rainures de la semelle")
     st.write("- **Diamant** : modèle théorique des sillons")
-
-
-
-
-
-
-
