@@ -434,48 +434,90 @@ with tabs[3]:
 # Tab 5: Analyse profils
 # -----------------------------
 with tabs[4]:
-    st.subheader("Analyse profils (1D)")
+    st.subheader("Analyse des profils (1D)")
+
     st.info("""
-            Analyse des profils :
-            
-            - Extraction de profils 1D depuis la surface 2D
-            - Calcul d’un profil moyen
-            - Analyse de la dispersion autour du profil
-            
-            Méthodes classiques d’analyse de surface
-            
-            Réduction :
-            Surface 2D → profils 1D
-            --""")
+Réduction de dimension :
+
+La surface 2D (Z) est transformée en profils 1D pour simplifier l’analyse.
+
+Méthodologie :
+- Extraction de plusieurs lignes de la grille
+- Visualisation des profils individuels
+- Calcul d’un profil moyen
+- Analyse de la dispersion (min / max)
+""")
+
     if sel_row is None:
-        st.stop()
+        st.info("Aucun fichier sélectionné.")
+    else:
+        with st.spinner("Lecture complète..."):
+            dfP, gP = load_grid_or_scatter(sel_row)
 
-    with st.spinner("Lecture complète..."):
-        dfP, gP = load_grid_or_scatter(sel_row)
+        if not gP.is_grid:
+            st.warning("Analyse profils disponible seulement si fichier en grille.")
+        else:
+            # -----------------------------
+            # Paramètres utilisateur
+            # -----------------------------
+            colA, colB = st.columns(2)
+            with colA:
+                n_lines = st.slider("Nombre de profils affichés", 3, 30, 10)
+            with colB:
+                ref0 = st.checkbox("Centrer la surface (max = 0)", value=True)
 
-    if not gP.is_grid:
-        st.warning("Analyse profils disponible seulement si fichier en grille.")
-        st.stop()
+            Z = gP.Z.copy()
 
-    cA, cB = st.columns([1, 2])
-    with cA:
-        axis = st.selectbox(
-            "Direction des profils",
-            options=["Profils en X (lignes Y)", "Profils en Y (colonnes X)"],
-            index=0,
-        )
-        axis_id = 0 if axis.startswith("Profils en X") else 1
-        n_lines = st.slider("Nombre de profils affichés", 3, 30, 10, 1)
-        ref0 = st.checkbox("Référence surface = 0 (soustraire max)", value=True)
+            if ref0:
+                Z = Z - np.nanmax(Z)
 
-    Zuse = gP.Z.copy()
-    if ref0:
-        Zuse = Zuse - np.nanmax(Zuse)
+            ny, nx = Z.shape
+            indices = np.linspace(0, ny - 1, n_lines, dtype=int)
 
-    with cB:
-        st.pyplot(fig_profiles_sample(Zuse, n_lines=n_lines, axis=axis_id, title="Profils individuels"))
-        st.pyplot(fig_profile_band_mean(Zuse, axis=axis_id, title="Profil moyen + dispersion", ref_to_zero=False))
+            # -----------------------------
+            # 1. Profils individuels
+            # -----------------------------
+            fig1 = Figure(figsize=(10, 4), dpi=120)
+            ax1 = fig1.add_subplot(111)
 
+            for i in indices:
+                ax1.plot(Z[i, :], alpha=0.7)
+
+            ax1.set_title("Profils individuels")
+            ax1.set_xlabel("Position X")
+            ax1.set_ylabel("Profondeur (µm)")
+            ax1.grid(True)
+
+            st.pyplot(fig1)
+
+            # -----------------------------
+            # 2. Profil moyen + dispersion
+            # -----------------------------
+            profil_moyen = np.nanmean(Z, axis=0)
+            profil_min = np.nanmin(Z, axis=0)
+            profil_max = np.nanmax(Z, axis=0)
+
+            fig2 = Figure(figsize=(10, 4), dpi=120)
+            ax2 = fig2.add_subplot(111)
+
+            ax2.fill_between(
+                range(nx),
+                profil_min,
+                profil_max,
+                alpha=0.3,
+                label="Dispersion (min–max)"
+            )
+            ax2.plot(profil_moyen, linewidth=2, label="Profil moyen")
+
+            ax2.set_title("Profil moyen et dispersion")
+            ax2.set_xlabel("Position X")
+            ax2.set_ylabel("Profondeur (µm)")
+            ax2.legend()
+            ax2.grid(True)
+
+            st.pyplot(fig2)
+
+            st.caption("Réductibilité : surface 2D → profils 1D pour analyse simplifiée")
 # -----------------------------
 # Tab 6: Analyse sillons
 # -----------------------------
