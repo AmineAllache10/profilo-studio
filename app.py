@@ -636,7 +636,11 @@ with tabs[3]:
 
                 # ---- Tableau recapitulatif + export CSV
                 st.subheader("Recapitulatif des metriques")
-
+                 
+                dK_abs = res_rec.get(
+                    "dK",
+                    abs(res_rec["kurtosis_moyenne"] - res_rec["kurtosis_modele"])
+                )
                 recap = {
                     "fichier": str(sel_row["chemin"]),
                     "Ra_mesure": res_rec["Ra"],
