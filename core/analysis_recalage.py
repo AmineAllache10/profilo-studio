@@ -124,17 +124,25 @@ def analyse_recalage(
     modele = _build_modele_creneau(len(profil_det), largeur_sillon_px, profondeur_um)
     modele_aligne, decalage_px = _aligne_correlation(profil_det, modele)
 
-    # ---- 8. Ra / Rq / Kurtosis profil moyen
+    # ---- 8. Ra / Rq / Kurtosis excès profil moyen (aligné script analyse.py)
+    def _kurtosis_excess(v: np.ndarray) -> float:
+        m = float(np.mean(v))
+        s = float(np.std(v))
+        if s < 1e-12:
+            return float("nan")
+        return abs(float(np.mean((v - m) ** 4) / s ** 4) - 3.0)
+
     Ra = float(np.mean(np.abs(profil_det)))
     Rq = float(np.sqrt(np.mean(profil_det ** 2)))
-    zstd = float(np.std(profil_det))
-    kurtosis_profil = float(np.mean((profil_det - np.mean(profil_det)) ** 4) / zstd ** 4) if zstd > 0 else float("nan")
+    kurtosis_profil = _kurtosis_excess(profil_det)
 
     # ---- 8b. Métriques modèle aligné
     Ra_modele = float(np.mean(np.abs(modele_aligne)))
     Rq_modele = float(np.sqrt(np.mean(modele_aligne ** 2)))
-    zstd_m = float(np.std(modele_aligne))
-    kurtosis_modele = float(np.mean((modele_aligne - np.mean(modele_aligne)) ** 4) / zstd_m ** 4) if zstd_m > 0 else float("nan")
+    kurtosis_modele = _kurtosis_excess(modele_aligne)
+
+    # ---- 8c. L2 global (profil moyen vs modele aligné)
+    L2_global = float(np.sqrt(np.sum((profil_det - modele_aligne) ** 2) * resolution_um_px))
 
     # ---- 9. Kurtosis ligne par ligne
     x_px = np.arange(nx)
@@ -213,7 +221,9 @@ def analyse_recalage(
 
     erreur_Ra_pct = _err_pct(Ra, Ra_modele)
     erreur_Rq_pct = _err_pct(Rq, Rq_modele)
+    # dK = difference absolue (aligné script analyse.py)
     erreur_kurtosis_pct = _err_pct(kurtosis_moyenne, kurtosis_modele)
+    dK = abs(kurtosis_moyenne - kurtosis_modele)
 
     return {
         # calibration
@@ -246,6 +256,8 @@ def analyse_recalage(
         "erreur_Ra_pct": erreur_Ra_pct,
         "erreur_Rq_pct": erreur_Rq_pct,
         "erreur_kurtosis_pct": erreur_kurtosis_pct,
+        "dK": dK,
+        "L2_global": L2_global,
         # arrays pour plot
         "profil_det": profil_det,
         "modele_aligne": modele_aligne,

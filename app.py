@@ -532,21 +532,42 @@ with tabs[3]:
 
             # ---- Profil vs modèle
             st.subheader("Profil moyen vs modèle créneau")
+            # Nettoyer le profil : limites Y serrees sur les donnees valides
+            profil_plot = res_rec["profil_det"].copy().astype(float)
+            modele_plot = res_rec["modele_aligne"].copy().astype(float)
+
+            valeurs_valides = np.concatenate([
+                profil_plot[np.isfinite(profil_plot)],
+                modele_plot[np.isfinite(modele_plot)],
+            ])
+            if valeurs_valides.size > 0:
+                p1  = float(np.percentile(valeurs_valides, 1))
+                p99 = float(np.percentile(valeurs_valides, 99))
+                marge = abs(p99 - p1) * 0.15
+                y_min_plot = p1  - marge
+                y_max_plot = p99 + marge
+                # Masquer les spikes de bord (chute brutale hors plage)
+                profil_plot[profil_plot < y_min_plot] = np.nan
+            else:
+                y_min_plot, y_max_plot = None, None
+
             fig_pvm = Figure(figsize=(11, 4), dpi=120)
             ax_pvm = fig_pvm.add_subplot(111)
             ax_pvm.plot(
-                res_rec["profil_det"],
-                label=f"Profil mesuré  (Ra={res_rec['Ra']:.3f}, Rq={res_rec['Rq']:.3f}, K={res_rec['kurtosis_profil']:.2f})",
+                profil_plot,
+                label=f"Profil mesure  (Ra={res_rec['Ra']:.3f}, Rq={res_rec['Rq']:.3f}, K={res_rec['kurtosis_profil']:.2f})",
             )
             ax_pvm.plot(
-                res_rec["modele_aligne"], "--", color="orange",
-                label=f"Modèle créneau (Ra={res_rec['Ra_modele']:.3f}, Rq={res_rec['Rq_modele']:.3f}, K={res_rec['kurtosis_modele']:.2f})",
+                modele_plot, "--", color="orange",
+                label=f"Modele creneau (Ra={res_rec['Ra_modele']:.3f}, Rq={res_rec['Rq_modele']:.3f}, K={res_rec['kurtosis_modele']:.2f})",
             )
+            if y_min_plot is not None:
+                ax_pvm.set_ylim(y_min_plot, y_max_plot)
             ax_pvm.set_xlabel("Index X")
             ax_pvm.set_ylabel("Profondeur (µm)")
-            ax_pvm.set_title("Profil moyen vs modèle aligné")
-            ax_pvm.grid(True)
-            ax_pvm.legend()
+            ax_pvm.set_title("Profil moyen vs modele aligne")
+            ax_pvm.grid(True, alpha=0.4)
+            ax_pvm.legend(loc="lower right")
             fig_pvm.tight_layout()
             st.pyplot(fig_pvm)
 
@@ -611,6 +632,75 @@ with tabs[3]:
                 ax_l2.legend()
                 fig_l2.tight_layout()
                 st.pyplot(fig_l2)
+                st.divider()
+
+                # ---- Tableau recapitulatif + export CSV
+                st.subheader("Recapitulatif des metriques")
+
+                recap = {
+                    "fichier": str(sel_row["chemin"]),
+                    "Ra_mesure": res_rec["Ra"],
+                    "Rq_mesure": res_rec["Rq"],
+                    "K_mesure": res_rec["kurtosis_profil"],
+                    "Ra_modele": res_rec["Ra_modele"],
+                    "Rq_modele": res_rec["Rq_modele"],
+                    "K_modele": res_rec["kurtosis_modele"],
+                    "dRa_pct": res_rec["erreur_Ra_pct"],
+                    "dRq_pct": res_rec["erreur_Rq_pct"],
+                    "dK_abs": res_rec["dK"],
+                    "L2_global": res_rec["L2_global"],
+                    "L2_norm_moyenne": res_rec["L2_norm_moyenne"],
+                    "L2_norm_std": res_rec["L2_norm_std"],
+                    "kurtosis_moy_lignes": res_rec["kurtosis_moyenne"],
+                    "kurtosis_std_lignes": res_rec["kurtosis_std"],
+                    "periode_um": res_rec["periode_um"],
+                    "largeur_sillon_um": res_rec["largeur_sillon_um"],
+                    "profondeur_um": res_rec["profondeur_um"],
+                    "resolution_um_px": res_rec["resolution_um_px"],
+                }
+
+                df_recap = pd.DataFrame([recap])
+                st.dataframe(df_recap.T.rename(columns={0: "Valeur"}), use_container_width=True)
+
+                # Export CSV (append)
+                csv_export_path = "resultats_profils.csv"
+                file_exists = os.path.exists(csv_export_path)
+
+                col_csv1, col_csv2 = st.columns(2)
+
+                with col_csv1:
+                    if st.button("Ajouter au CSV", key="btn_csv_append"):
+                        df_recap.to_csv(
+                            csv_export_path,
+                            mode="a",
+                            header=not file_exists,
+                            index=False,
+                        )
+                        st.success(f"Ligne ajoutee dans {csv_export_path}")
+
+                with col_csv2:
+                    # Telechargement direct sans ecrire sur disque
+                    csv_bytes = df_recap.to_csv(index=False).encode("utf-8")
+                    st.download_button(
+                        "Telecharger CSV (cette ligne)",
+                        data=csv_bytes,
+                        file_name=f"recalage_{os.path.splitext(os.path.basename(str(sel_row['chemin'])))[0]}.csv",
+                        mime="text/csv",
+                        key="btn_csv_dl",
+                    )
+
+                # Si le CSV global existe, proposer de le telecharger aussi
+                if os.path.exists(csv_export_path):
+                    with open(csv_export_path, "rb") as fcsv:
+                        st.download_button(
+                            "Telecharger resultats_profils.csv complet",
+                            data=fcsv.read(),
+                            file_name="resultats_profils.csv",
+                            mime="text/csv",
+                            key="btn_csv_global",
+                        )
+
+
 
 
 # -----------------------------
@@ -700,7 +790,157 @@ Méthodologie :
 
             st.pyplot(fig2)
 
-            st.caption("Réductibilité : surface 2D → profils 1D pour analyse simplifiée")
+            st.caption("Reduction : surface 2D vers profils 1D pour analyse simplifiee")
+
+            st.divider()
+
+            # -----------------------------
+            # 3. Classification et visualisation CSV
+            # -----------------------------
+            st.subheader("Classification des sillons")
+
+            CSV_PATH = "resultats_profils.csv"
+
+            if not os.path.exists(CSV_PATH):
+                st.info("Aucun resultat disponible. Lance le recalage sur plusieurs fichiers et exporte via l'onglet Recalage.")
+            else:
+                df_csv = pd.read_csv(CSV_PATH).dropna(subset=["largeur_sillon_um", "profondeur_um"])
+
+                if df_csv.empty:
+                    st.warning("Le CSV est vide ou ne contient pas les colonnes attendues.")
+                else:
+                    def classify_sillons(row):
+                        largeur = row["largeur_sillon_um"]
+                        profondeur = row["profondeur_um"]
+                        if largeur < 30:
+                            return "Type 1 : fin peu profond"
+                        elif largeur > 60:
+                            if profondeur < 11:
+                                return "Type 4 : large intermediaire"
+                            else:
+                                return "Type 3 : large profond"
+                        else:
+                            return "Type 2 : moyen profond"
+
+                    df_csv["groupe"] = df_csv.apply(classify_sillons, axis=1)
+
+                    MARKERS = {
+                        "Type 1 : fin peu profond": "^",
+                        "Type 2 : moyen profond": "s",
+                        "Type 3 : large profond": "o",
+                        "Type 4 : large intermediaire": "D",
+                    }
+                    COLORS = {
+                        "Type 1 : fin peu profond": "#4C72B0",
+                        "Type 2 : moyen profond": "#DD8452",
+                        "Type 3 : large profond": "#55A868",
+                        "Type 4 : large intermediaire": "#C44E52",
+                    }
+
+                    st.write(f"Fichiers charges : **{len(df_csv)}** — Groupes : **{df_csv['groupe'].nunique()}**")
+                    st.dataframe(df_csv[["fichier", "largeur_sillon_um", "profondeur_um", "groupe"]].sort_values("groupe"), use_container_width=True)
+
+                    # ---- Ra ideal vs reel
+                    st.markdown("**Ra : ideal vs reel**")
+                    fig_ra = Figure(figsize=(6, 4), dpi=110)
+                    ax_ra = fig_ra.add_subplot(111)
+                    for grp in df_csv["groupe"].unique():
+                        sub = df_csv[df_csv["groupe"] == grp]
+                        ax_ra.scatter(sub["Ra_modele"], sub["Ra_mesure"],
+                                      label=grp, marker=MARKERS.get(grp, "o"),
+                                      color=COLORS.get(grp, "gray"))
+                    mn = min(df_csv["Ra_modele"].min(), df_csv["Ra_mesure"].min())
+                    mx = max(df_csv["Ra_modele"].max(), df_csv["Ra_mesure"].max())
+                    ax_ra.plot([mn, mx], [mn, mx], "r--", label="Parfait")
+                    ax_ra.set_xlabel("Ra ideal (modele)")
+                    ax_ra.set_ylabel("Ra reel (mesure)")
+                    ax_ra.set_title("Comparaison Ra")
+                    ax_ra.legend(fontsize=7)
+                    ax_ra.grid(True, alpha=0.4)
+                    fig_ra.tight_layout()
+                    st.pyplot(fig_ra)
+
+                    # ---- Rq ideal vs reel
+                    st.markdown("**Rq : ideal vs reel**")
+                    fig_rq = Figure(figsize=(6, 4), dpi=110)
+                    ax_rq = fig_rq.add_subplot(111)
+                    for grp in df_csv["groupe"].unique():
+                        sub = df_csv[df_csv["groupe"] == grp]
+                        ax_rq.scatter(sub["Rq_modele"], sub["Rq_mesure"],
+                                      label=grp, marker=MARKERS.get(grp, "o"),
+                                      color=COLORS.get(grp, "gray"))
+                    mn = min(df_csv["Rq_modele"].min(), df_csv["Rq_mesure"].min())
+                    mx = max(df_csv["Rq_modele"].max(), df_csv["Rq_mesure"].max())
+                    ax_rq.plot([mn, mx], [mn, mx], "r--", label="Parfait")
+                    ax_rq.set_xlabel("Rq ideal (modele)")
+                    ax_rq.set_ylabel("Rq reel (mesure)")
+                    ax_rq.set_title("Comparaison Rq")
+                    ax_rq.legend(fontsize=7)
+                    ax_rq.grid(True, alpha=0.4)
+                    fig_rq.tight_layout()
+                    st.pyplot(fig_rq)
+
+                    # ---- Kurtosis reel vs K ideal
+                    st.markdown("**Kurtosis reel vs modele ideal**")
+                    fig_k = Figure(figsize=(8, 4), dpi=110)
+                    ax_k = fig_k.add_subplot(111)
+                    K_ideal = float(df_csv["K_modele"].iloc[0]) if "K_modele" in df_csv.columns else None
+                    for grp in df_csv["groupe"].unique():
+                        sub = df_csv[df_csv["groupe"] == grp]
+                        ax_k.scatter(sub["largeur_sillon_um"], sub["K_mesure"],
+                                     label=grp, marker=MARKERS.get(grp, "o"),
+                                     color=COLORS.get(grp, "gray"))
+                    if K_ideal is not None:
+                        ax_k.axhline(y=K_ideal, linestyle="--", color="red", label=f"K ideal = {K_ideal:.2f}")
+                    ax_k.set_xlabel("Largeur sillon (µm)")
+                    ax_k.set_ylabel("Kurtosis mesure")
+                    ax_k.set_title("Ecart kurtosis reel vs modele ideal")
+                    ax_k.legend(fontsize=7)
+                    ax_k.grid(True, alpha=0.4)
+                    fig_k.tight_layout()
+                    st.pyplot(fig_k)
+
+                    # ---- Geometrie vs L2 (colormap)
+                    st.markdown("**Geometrie des sillons vs erreur L2**")
+                    fig_l2g = Figure(figsize=(8, 4), dpi=110)
+                    ax_l2g = fig_l2g.add_subplot(111)
+                    for grp in df_csv["groupe"].unique():
+                        sub = df_csv[df_csv["groupe"] == grp]
+                        sc = ax_l2g.scatter(sub["largeur_sillon_um"], sub["profondeur_um"],
+                                            c=sub["L2_global"], marker=MARKERS.get(grp, "o"),
+                                            label=grp, cmap="YlOrRd", vmin=df_csv["L2_global"].min(),
+                                            vmax=df_csv["L2_global"].max())
+                    fig_l2g.colorbar(sc, ax=ax_l2g, label="L2 global")
+                    ax_l2g.set_xlabel("Largeur (µm)")
+                    ax_l2g.set_ylabel("Profondeur (µm)")
+                    ax_l2g.set_title("Geometrie des sillons vs erreur L2")
+                    ax_l2g.legend(fontsize=7)
+                    ax_l2g.grid(True, alpha=0.4)
+                    fig_l2g.tight_layout()
+                    st.pyplot(fig_l2g)
+
+                    # ---- Profondeur vs L2
+                    st.markdown("**Impact profondeur sur L2**")
+                    fig_d = Figure(figsize=(6, 4), dpi=110)
+                    ax_d = fig_d.add_subplot(111)
+                    for grp in df_csv["groupe"].unique():
+                        sub = df_csv[df_csv["groupe"] == grp]
+                        ax_d.scatter(sub["profondeur_um"], sub["L2_global"],
+                                     label=grp, marker=MARKERS.get(grp, "o"),
+                                     color=COLORS.get(grp, "gray"))
+                    ax_d.set_xlabel("Profondeur (µm)")
+                    ax_d.set_ylabel("L2 global")
+                    ax_d.set_title("Impact de la profondeur sur L2")
+                    ax_d.legend(fontsize=7)
+                    ax_d.grid(True, alpha=0.4)
+                    fig_d.tight_layout()
+                    st.pyplot(fig_d)
+
+                    # ---- Top kurtosis
+                    st.markdown("**Top 5 kurtosis (usure outil)**")
+                    top_k = df_csv.sort_values("K_mesure", ascending=False).head(5)
+                    st.dataframe(top_k[["fichier", "K_mesure", "largeur_sillon_um", "profondeur_um"]], use_container_width=True)
+
 # -----------------------------
 # Tab 6: Analyse sillons
 # -----------------------------
