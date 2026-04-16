@@ -305,12 +305,17 @@ with tabs[1]:
 
         with left:
             if gridp.is_grid:
+                import plotly.express as _px_viz
                 st.caption("Comparaison entre la surface réelle mesurée et un modèle théorique de structure diamant")
+                st.caption("🔍 Zoom : sélectionner une zone · Double-clic pour réinitialiser")
 
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    st.pyplot(fig_heatmap(gridp.Z, title="Semelle mesurée"))
+                    _fig_mes = _px_viz.imshow(gridp.Z, origin="lower", color_continuous_scale="viridis",
+                                              labels={"color": "Z (µm)"}, title="Semelle mesurée", aspect="auto")
+                    _fig_mes.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
+                    st.plotly_chart(_fig_mes, use_container_width=True)
 
                 with col2:
                     # Modèle théorique PMMA : créneau à la même résolution que Z
@@ -355,19 +360,21 @@ with tabs[1]:
                     # Même grille que Z : motif répété sur toutes les lignes Y
                     Z_modele = np.tile(ligne_modele, (ny_g, 1))
 
-                    st.pyplot(fig_heatmap(Z_modele, title="Modèle théorique (sillons PMMA)"))
+                    _fig_mod = _px_viz.imshow(Z_modele, origin="lower", color_continuous_scale="viridis",
+                                               labels={"color": "Z (µm)"}, title="Modèle théorique (sillons PMMA)", aspect="auto")
+                    _fig_mod.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
+                    st.plotly_chart(_fig_mod, use_container_width=True)
                     st.caption(f"Période détectée : {periode_px} px · Même échelle couleur que la mesure")
             else:
-                fig = Figure(figsize=(6.5, 4.5), dpi=120)
-                ax = fig.add_subplot(111)
+                import plotly.express as _px_scatter
                 n = dfp.shape[0]
                 sample = dfp.sample(200000, random_state=0) if n > 200000 else dfp
-                ax.scatter(sample["x"], sample["y"], s=1)
-                ax.set_title("Nuage de points (x,y) - preview (échantillonné)")
-                ax.set_xlabel("x")
-                ax.set_ylabel("y")
-                fig.tight_layout()
-                st.pyplot(fig)
+                _fig_sc = _px_scatter.scatter(sample, x="x", y="y", render_mode="webgl",
+                                              title="Nuage de points (x,y) — échantillonné",
+                                              labels={"x": "x", "y": "y"})
+                _fig_sc.update_traces(marker=dict(size=2))
+                _fig_sc.update_layout(height=420)
+                st.plotly_chart(_fig_sc, use_container_width=True)
 
         with right:
             st.write("**Fichier**")
@@ -444,12 +451,23 @@ with tabs[2]:
         st.stop()
 
     st.write(f"missing_rate = {gridm.missing_rate:.6f}")
+    st.caption("🔍 Zoom : sélectionner une zone · Double-clic pour réinitialiser")
 
+    import plotly.express as _px_miss
     c1, c2 = st.columns(2)
     with c1:
-        st.pyplot(fig_mask(gridm.missing_mask, title="Masque manquants (1=manquant)"))
+        _fig_mask = _px_miss.imshow(gridm.missing_mask.astype(float), origin="lower",
+                                    color_continuous_scale="reds", aspect="auto",
+                                    title="Masque manquants (1 = manquant)",
+                                    labels={"color": "Manquant"})
+        _fig_mask.update_layout(height=360, margin=dict(l=10, r=10, t=40, b=10))
+        st.plotly_chart(_fig_mask, use_container_width=True)
     with c2:
-        st.pyplot(fig_heatmap(gridm.Z, title="Surface AVANT (avec trous)"))
+        _fig_avant = _px_miss.imshow(gridm.Z, origin="lower", color_continuous_scale="viridis",
+                                     aspect="auto", title="Surface AVANT (avec trous)",
+                                     labels={"color": "Z (µm)"})
+        _fig_avant.update_layout(height=360, margin=dict(l=10, r=10, t=40, b=10))
+        st.plotly_chart(_fig_avant, use_container_width=True)
 
     st.divider()
     st.write("**Remplissage des trous** (optionnel, affichage avant/après)")
@@ -460,12 +478,18 @@ with tabs[2]:
         Z_filled = fill_missing(gridm.Z, method=method)
         d1, d2, d3 = st.columns(3)
         with d1:
-            st.pyplot(fig_heatmap(gridm.Z, title="AVANT"))
+            _f1 = _px_miss.imshow(gridm.Z, origin="lower", color_continuous_scale="viridis", aspect="auto", title="AVANT", labels={"color": "Z"})
+            _f1.update_layout(height=320, margin=dict(l=5, r=5, t=35, b=5))
+            st.plotly_chart(_f1, use_container_width=True)
         with d2:
-            st.pyplot(fig_heatmap(Z_filled, title="APRES"))
+            _f2 = _px_miss.imshow(Z_filled, origin="lower", color_continuous_scale="viridis", aspect="auto", title="APRÈS", labels={"color": "Z"})
+            _f2.update_layout(height=320, margin=dict(l=5, r=5, t=35, b=5))
+            st.plotly_chart(_f2, use_container_width=True)
         with d3:
             diff = np.abs(Z_filled - np.where(np.isfinite(gridm.Z), gridm.Z, Z_filled))
-            st.pyplot(fig_heatmap(diff, title="DIFF (abs)"))
+            _f3 = _px_miss.imshow(diff, origin="lower", color_continuous_scale="hot", aspect="auto", title="DIFF (abs)", labels={"color": "Δ"})
+            _f3.update_layout(height=320, margin=dict(l=5, r=5, t=35, b=5))
+            st.plotly_chart(_f3, use_container_width=True)
     else:
         st.info("Active 'Appliquer remplissage' pour voir l'APRES.")
 
@@ -759,339 +783,240 @@ Méthodologie :
 
             st.caption("Reduction : surface 2D vers profils 1D pour analyse simplifiee")
 
-            st.divider()
-
-            # -----------------------------
-            # 3. Classification et visualisation CSV
-            # -----------------------------
-            st.subheader("Classification des sillons")
-
-            CSV_PATH = "resultats_profils.csv"
-
-            if not os.path.exists(CSV_PATH):
-                st.info("Aucun resultat disponible. Lance le recalage sur plusieurs fichiers et exporte via l'onglet Recalage.")
-            else:
-                df_csv = pd.read_csv(CSV_PATH)
-                df_csv = df_csv.rename(columns={
-                    "Ra_bleu": "Ra_mesure",
-                    "Rq_bleu": "Rq_mesure",
-                    "K_bleu": "K_mesure",
-                    "Ra_orange": "Ra_modele",
-                    "Rq_orange": "Rq_modele",
-                    "K_orange": "K_modele",
-                    "L2": "L2_global"
-                })
-
-                df_csv = df_csv.dropna(subset=["largeur_sillon_um", "profondeur_um"])
-
-                if df_csv.empty:
-                    st.warning("Le CSV est vide ou ne contient pas les colonnes attendues.")
-                else:
-                    def classify_sillons(row):
-                        largeur = row["largeur_sillon_um"]
-                        profondeur = row["profondeur_um"]
-                        if largeur < 30:
-                            return "Type 1 : fin peu profond"
-                        elif largeur > 60:
-                            if profondeur < 11:
-                                return "Type 4 : large intermediaire"
-                            else:
-                                return "Type 3 : large profond"
-                        else:
-                            return "Type 2 : moyen profond"
-
-                    df_csv["groupe"] = df_csv.apply(classify_sillons, axis=1)
-
-                    MARKERS = {
-                        "Type 1 : fin peu profond": "^",
-                        "Type 2 : moyen profond": "s",
-                        "Type 3 : large profond": "o",
-                        "Type 4 : large intermediaire": "D",
-                    }
-                    COLORS = {
-                        "Type 1 : fin peu profond": "#4C72B0",
-                        "Type 2 : moyen profond": "#DD8452",
-                        "Type 3 : large profond": "#55A868",
-                        "Type 4 : large intermediaire": "#C44E52",
-                    }
-
-                    st.write(f"Fichiers charges : **{len(df_csv)}** — Groupes : **{df_csv['groupe'].nunique()}**")
-                    st.dataframe(df_csv[["fichier", "largeur_sillon_um", "profondeur_um", "groupe"]].sort_values("groupe"), use_container_width=True)
-
-                    # ---- Ra ideal vs reel
-                    st.markdown("**Ra : ideal vs reel**")
-                    fig_ra = Figure(figsize=(6, 4), dpi=110)
-                    ax_ra = fig_ra.add_subplot(111)
-                    for grp in df_csv["groupe"].unique():
-                        sub = df_csv[df_csv["groupe"] == grp]
-                        ax_ra.scatter(sub["Ra_modele"], sub["Ra_mesure"],
-                                      label=grp, marker=MARKERS.get(grp, "o"),
-                                      color=COLORS.get(grp, "gray"))
-                    mn = min(df_csv["Ra_modele"].min(), df_csv["Ra_mesure"].min())
-                    mx = max(df_csv["Ra_modele"].max(), df_csv["Ra_mesure"].max())
-                    ax_ra.plot([mn, mx], [mn, mx], "r--", label="Parfait")
-                    ax_ra.set_xlabel("Ra ideal (modele)")
-                    ax_ra.set_ylabel("Ra reel (mesure)")
-                    ax_ra.set_title("Comparaison Ra")
-                    ax_ra.legend(fontsize=7)
-                    ax_ra.grid(True, alpha=0.4)
-                    fig_ra.tight_layout()
-                    st.pyplot(fig_ra)
-
-                    # ---- Rq ideal vs reel
-                    st.markdown("**Rq : ideal vs reel**")
-                    fig_rq = Figure(figsize=(6, 4), dpi=110)
-                    ax_rq = fig_rq.add_subplot(111)
-                    for grp in df_csv["groupe"].unique():
-                        sub = df_csv[df_csv["groupe"] == grp]
-                        ax_rq.scatter(sub["Rq_modele"], sub["Rq_mesure"],
-                                      label=grp, marker=MARKERS.get(grp, "o"),
-                                      color=COLORS.get(grp, "gray"))
-                    mn = min(df_csv["Rq_modele"].min(), df_csv["Rq_mesure"].min())
-                    mx = max(df_csv["Rq_modele"].max(), df_csv["Rq_mesure"].max())
-                    ax_rq.plot([mn, mx], [mn, mx], "r--", label="Parfait")
-                    ax_rq.set_xlabel("Rq ideal (modele)")
-                    ax_rq.set_ylabel("Rq reel (mesure)")
-                    ax_rq.set_title("Comparaison Rq")
-                    ax_rq.legend(fontsize=7)
-                    ax_rq.grid(True, alpha=0.4)
-                    fig_rq.tight_layout()
-                    st.pyplot(fig_rq)
-
-                    # ---- Kurtosis reel vs K ideal
-                    st.markdown("**Kurtosis reel vs modele ideal**")
-                    fig_k = Figure(figsize=(8, 4), dpi=110)
-                    ax_k = fig_k.add_subplot(111)
-                    K_ideal = float(df_csv["K_modele"].iloc[0]) if "K_modele" in df_csv.columns else None
-                    for grp in df_csv["groupe"].unique():
-                        sub = df_csv[df_csv["groupe"] == grp]
-                        ax_k.scatter(sub["largeur_sillon_um"], sub["K_mesure"],
-                                     label=grp, marker=MARKERS.get(grp, "o"),
-                                     color=COLORS.get(grp, "gray"))
-                    if K_ideal is not None:
-                        ax_k.axhline(y=K_ideal, linestyle="--", color="red", label=f"K ideal = {K_ideal:.2f}")
-                    ax_k.set_xlabel("Largeur sillon (µm)")
-                    ax_k.set_ylabel("Kurtosis mesure")
-                    ax_k.set_title("Ecart kurtosis reel vs modele ideal")
-                    ax_k.legend(fontsize=7)
-                    ax_k.grid(True, alpha=0.4)
-                    fig_k.tight_layout()
-                    st.pyplot(fig_k)
-
-                    # ---- Geometrie vs L2 (colormap)
-                    st.markdown("**Geometrie des sillons vs erreur L2**")
-                    fig_l2g = Figure(figsize=(8, 4), dpi=110)
-                    ax_l2g = fig_l2g.add_subplot(111)
-                    for grp in df_csv["groupe"].unique():
-                        sub = df_csv[df_csv["groupe"] == grp]
-                        sc = ax_l2g.scatter(sub["largeur_sillon_um"], sub["profondeur_um"],
-                                            c=sub["L2_global"], marker=MARKERS.get(grp, "o"),
-                                            label=grp, cmap="YlOrRd", vmin=df_csv["L2_global"].min(),
-                                            vmax=df_csv["L2_global"].max())
-                    fig_l2g.colorbar(sc, ax=ax_l2g, label="L2 global")
-                    ax_l2g.set_xlabel("Largeur (µm)")
-                    ax_l2g.set_ylabel("Profondeur (µm)")
-                    ax_l2g.set_title("Geometrie des sillons vs erreur L2")
-                    ax_l2g.legend(fontsize=7)
-                    ax_l2g.grid(True, alpha=0.4)
-                    fig_l2g.tight_layout()
-                    st.pyplot(fig_l2g)
-
-                    # ---- Profondeur vs L2
-                    st.markdown("**Impact profondeur sur L2**")
-                    fig_d = Figure(figsize=(6, 4), dpi=110)
-                    ax_d = fig_d.add_subplot(111)
-                    for grp in df_csv["groupe"].unique():
-                        sub = df_csv[df_csv["groupe"] == grp]
-                        ax_d.scatter(sub["profondeur_um"], sub["L2_global"],
-                                     label=grp, marker=MARKERS.get(grp, "o"),
-                                     color=COLORS.get(grp, "gray"))
-                    ax_d.set_xlabel("Profondeur (µm)")
-                    ax_d.set_ylabel("L2 global")
-                    ax_d.set_title("Impact de la profondeur sur L2")
-                    ax_d.legend(fontsize=7)
-                    ax_d.grid(True, alpha=0.4)
-                    fig_d.tight_layout()
-                    st.pyplot(fig_d)
-
-                    # ---- Top kurtosis
-                    st.markdown("**Top 5 kurtosis (usure outil)**")
-                    top_k = df_csv.sort_values("K_mesure", ascending=False).head(5)
-                    st.dataframe(top_k[["fichier", "K_mesure", "largeur_sillon_um", "profondeur_um"]], use_container_width=True)
-
 # -----------------------------
 # Tab 6: Analyse globale des sillons
 # -----------------------------
 with tabs[5]:
+    import plotly.express as px
+    import plotly.graph_objects as go
+
     st.subheader("Analyse globale des sillons")
+    st.info("Tous les graphes sont interactifs : zoom, pan, survol pour les détails du fichier.")
 
     csv_path = "resultats_profils.csv"
 
     if not os.path.exists(csv_path):
-        st.warning("CSV non trouvé.")
-        st.stop()
+        st.warning("Aucun résultat disponible. Lance le recalage sur plusieurs fichiers et exporte via l'onglet Recalage.")
+    else:
+        df = pd.read_csv(csv_path)
+        df = df.rename(columns={
+            "Ra_bleu": "Ra_mesure",
+            "Rq_bleu": "Rq_mesure",
+            "K_bleu": "K_mesure",
+            "Ra_orange": "Ra_modele",
+            "Rq_orange": "Rq_modele",
+            "K_orange": "K_modele",
+            "L2": "L2_global"
+        })
+        df = df.dropna(subset=["largeur_sillon_um", "profondeur_um"])
 
-    df = pd.read_csv(csv_path)
-
-    df = df.rename(columns={
-        "Ra_bleu": "Ra_mesure",
-        "Rq_bleu": "Rq_mesure",
-        "K_bleu": "K_mesure",
-        "Ra_orange": "Ra_modele",
-        "Rq_orange": "Rq_modele",
-        "K_orange": "K_modele",
-        "L2": "L2_global"
-    })
-
-    df = df.dropna()
-
-    if df.empty:
-        st.warning("Aucune donnée exploitable.")
-        st.stop()
-
-    # -------------------------
-    # CLASSIFICATION
-    # -------------------------
-    def classify_sillons(row):
-        if row["largeur_sillon_um"] < 30:
-            return "Type 1"
-        elif row["largeur_sillon_um"] > 60:
-            return "Type 3" if row["profondeur_um"] > 11 else "Type 4"
+        if df.empty:
+            st.warning("Le CSV est vide ou ne contient pas les colonnes attendues.")
         else:
-            return "Type 2"
+            # -------------------------
+            # CLASSIFICATION
+            # -------------------------
+            def classify_sillons(row):
+                largeur = row["largeur_sillon_um"]
+                profondeur = row["profondeur_um"]
+                if largeur < 30:
+                    return "Type 1 : fin peu profond"
+                elif largeur > 60:
+                    return "Type 3 : large profond" if profondeur > 11 else "Type 4 : large intermédiaire"
+                else:
+                    return "Type 2 : moyen profond"
 
-    df["groupe"] = df.apply(classify_sillons, axis=1)
+            df["groupe"] = df.apply(classify_sillons, axis=1)
+            df["fichier_court"] = df["fichier"].apply(lambda p: os.path.basename(str(p)))
 
-    # =========================
-    # 1. Ra
-    # =========================
-    st.subheader("Ra : idéal vs réel")
+            COLOR_MAP = {
+                "Type 1 : fin peu profond":     "#4C72B0",
+                "Type 2 : moyen profond":       "#DD8452",
+                "Type 3 : large profond":       "#55A868",
+                "Type 4 : large intermédiaire": "#C44E52",
+            }
+            SYMBOL_MAP = {
+                "Type 1 : fin peu profond":     "triangle-up",
+                "Type 2 : moyen profond":       "square",
+                "Type 3 : large profond":       "circle",
+                "Type 4 : large intermédiaire": "diamond",
+            }
 
-    fig = Figure()
-    ax = fig.add_subplot(111)
+            st.write(f"Fichiers chargés : **{len(df)}** — Groupes : **{df['groupe'].nunique()}**")
+            st.dataframe(
+                df[["fichier_court", "largeur_sillon_um", "profondeur_um", "Ra_mesure", "Rq_mesure", "K_mesure", "L2_global", "groupe"]]
+                .sort_values("groupe")
+                .rename(columns={"fichier_court": "fichier"}),
+                use_container_width=True,
+                height=220,
+            )
 
-    for g in df["groupe"].unique():
-        sub = df[df["groupe"] == g]
-        ax.scatter(sub["Ra_modele"], sub["Ra_mesure"], label=g)
+            PLOTLY_H = 420
+            HOVER_BASE = "<b>%{customdata[0]}</b><br>Groupe : %{customdata[1]}<br>"
 
-    mn = min(df["Ra_modele"].min(), df["Ra_mesure"].min())
-    mx = max(df["Ra_modele"].max(), df["Ra_mesure"].max())
-    ax.plot([mn, mx], [mn, mx], 'r--')
+            # -------------------------
+            # 1. Ra idéal vs réel
+            # -------------------------
+            st.subheader("Ra : idéal vs réel")
+            fig_ra = go.Figure()
+            for grp, grp_df in df.groupby("groupe"):
+                fig_ra.add_trace(go.Scatter(
+                    x=grp_df["Ra_modele"], y=grp_df["Ra_mesure"],
+                    mode="markers",
+                    name=grp,
+                    marker=dict(color=COLOR_MAP.get(grp), symbol=SYMBOL_MAP.get(grp), size=10, line=dict(width=1, color="white")),
+                    customdata=grp_df[["fichier_court", "groupe", "Ra_modele", "Ra_mesure", "largeur_sillon_um", "profondeur_um"]].values,
+                    hovertemplate=(
+                        HOVER_BASE +
+                        "Ra modèle : %{customdata[2]:.4f} µm<br>"
+                        "Ra mesuré : %{customdata[3]:.4f} µm<br>"
+                        "Largeur : %{customdata[4]:.1f} µm · Profondeur : %{customdata[5]:.2f} µm"
+                        "<extra></extra>"
+                    ),
+                ))
+            mn = min(df["Ra_modele"].min(), df["Ra_mesure"].min())
+            mx = max(df["Ra_modele"].max(), df["Ra_mesure"].max())
+            fig_ra.add_trace(go.Scatter(x=[mn, mx], y=[mn, mx], mode="lines", line=dict(dash="dash", color="red"), name="Parfait", hoverinfo="skip"))
+            fig_ra.update_layout(height=PLOTLY_H, xaxis_title="Ra idéal (modèle) µm", yaxis_title="Ra réel (mesuré) µm", legend_title="Groupe")
+            st.plotly_chart(fig_ra, use_container_width=True)
 
-    ax.set_xlabel("Ra idéal")
-    ax.set_ylabel("Ra réel")
-    ax.legend()
-    ax.grid()
-    st.pyplot(fig)
+            # -------------------------
+            # 2. Rq idéal vs réel
+            # -------------------------
+            st.subheader("Rq : idéal vs réel")
+            fig_rq = go.Figure()
+            for grp, grp_df in df.groupby("groupe"):
+                fig_rq.add_trace(go.Scatter(
+                    x=grp_df["Rq_modele"], y=grp_df["Rq_mesure"],
+                    mode="markers",
+                    name=grp,
+                    marker=dict(color=COLOR_MAP.get(grp), symbol=SYMBOL_MAP.get(grp), size=10, line=dict(width=1, color="white")),
+                    customdata=grp_df[["fichier_court", "groupe", "Rq_modele", "Rq_mesure", "largeur_sillon_um", "profondeur_um"]].values,
+                    hovertemplate=(
+                        HOVER_BASE +
+                        "Rq modèle : %{customdata[2]:.4f} µm<br>"
+                        "Rq mesuré : %{customdata[3]:.4f} µm<br>"
+                        "Largeur : %{customdata[4]:.1f} µm · Profondeur : %{customdata[5]:.2f} µm"
+                        "<extra></extra>"
+                    ),
+                ))
+            mn = min(df["Rq_modele"].min(), df["Rq_mesure"].min())
+            mx = max(df["Rq_modele"].max(), df["Rq_mesure"].max())
+            fig_rq.add_trace(go.Scatter(x=[mn, mx], y=[mn, mx], mode="lines", line=dict(dash="dash", color="red"), name="Parfait", hoverinfo="skip"))
+            fig_rq.update_layout(height=PLOTLY_H, xaxis_title="Rq idéal (modèle) µm", yaxis_title="Rq réel (mesuré) µm", legend_title="Groupe")
+            st.plotly_chart(fig_rq, use_container_width=True)
 
-    # =========================
-    # 2. Rq
-    # =========================
-    st.subheader("Rq : idéal vs réel")
+            # -------------------------
+            # 3. Kurtosis vs largeur
+            # -------------------------
+            st.subheader("Kurtosis réel vs largeur de sillon")
+            fig_k = go.Figure()
+            K_ideal = float(df["K_modele"].iloc[0]) if "K_modele" in df.columns else None
+            for grp, grp_df in df.groupby("groupe"):
+                fig_k.add_trace(go.Scatter(
+                    x=grp_df["largeur_sillon_um"], y=grp_df["K_mesure"],
+                    mode="markers",
+                    name=grp,
+                    marker=dict(color=COLOR_MAP.get(grp), symbol=SYMBOL_MAP.get(grp), size=10, line=dict(width=1, color="white")),
+                    customdata=grp_df[["fichier_court", "groupe", "K_mesure", "K_modele", "largeur_sillon_um", "profondeur_um"]].values,
+                    hovertemplate=(
+                        HOVER_BASE +
+                        "K mesuré : %{customdata[2]:.3f}<br>"
+                        "K modèle : %{customdata[3]:.3f}<br>"
+                        "Largeur : %{customdata[4]:.1f} µm · Profondeur : %{customdata[5]:.2f} µm"
+                        "<extra></extra>"
+                    ),
+                ))
+            if K_ideal is not None:
+                fig_k.add_hline(y=K_ideal, line_dash="dash", line_color="red", annotation_text=f"K idéal = {K_ideal:.2f}")
+            fig_k.update_layout(height=PLOTLY_H, xaxis_title="Largeur sillon (µm)", yaxis_title="Kurtosis mesuré", legend_title="Groupe")
+            st.plotly_chart(fig_k, use_container_width=True)
 
-    fig = Figure()
-    ax = fig.add_subplot(111)
+            # -------------------------
+            # 4 & 5. L2 vs géométrie (2 graphes côte à côte)
+            # -------------------------
+            st.subheader("Erreur L2 vs géométrie")
+            col_l2a, col_l2b = st.columns(2)
 
-    for g in df["groupe"].unique():
-        sub = df[df["groupe"] == g]
-        ax.scatter(sub["Rq_modele"], sub["Rq_mesure"], label=g)
+            with col_l2a:
+                fig_l2larg = go.Figure()
+                for grp, grp_df in df.groupby("groupe"):
+                    fig_l2larg.add_trace(go.Scatter(
+                        x=grp_df["largeur_sillon_um"], y=grp_df["L2_global"],
+                        mode="markers", name=grp,
+                        marker=dict(color=COLOR_MAP.get(grp), symbol=SYMBOL_MAP.get(grp), size=10, line=dict(width=1, color="white")),
+                        customdata=grp_df[["fichier_court", "groupe", "largeur_sillon_um", "L2_global", "profondeur_um"]].values,
+                        hovertemplate=(
+                            HOVER_BASE +
+                            "Largeur : %{customdata[2]:.1f} µm<br>"
+                            "L2 : %{customdata[3]:.4f}<br>"
+                            "Profondeur : %{customdata[4]:.2f} µm"
+                            "<extra></extra>"
+                        ),
+                    ))
+                fig_l2larg.update_layout(height=PLOTLY_H, xaxis_title="Largeur (µm)", yaxis_title="L2 global", legend_title="Groupe", showlegend=False)
+                st.plotly_chart(fig_l2larg, use_container_width=True)
 
-    mn = min(df["Rq_modele"].min(), df["Rq_mesure"].min())
-    mx = max(df["Rq_modele"].max(), df["Rq_mesure"].max())
-    ax.plot([mn, mx], [mn, mx], 'r--')
+            with col_l2b:
+                fig_l2prof = go.Figure()
+                for grp, grp_df in df.groupby("groupe"):
+                    fig_l2prof.add_trace(go.Scatter(
+                        x=grp_df["profondeur_um"], y=grp_df["L2_global"],
+                        mode="markers", name=grp,
+                        marker=dict(color=COLOR_MAP.get(grp), symbol=SYMBOL_MAP.get(grp), size=10, line=dict(width=1, color="white")),
+                        customdata=grp_df[["fichier_court", "groupe", "profondeur_um", "L2_global", "largeur_sillon_um"]].values,
+                        hovertemplate=(
+                            HOVER_BASE +
+                            "Profondeur : %{customdata[2]:.2f} µm<br>"
+                            "L2 : %{customdata[3]:.4f}<br>"
+                            "Largeur : %{customdata[4]:.1f} µm"
+                            "<extra></extra>"
+                        ),
+                    ))
+                fig_l2prof.update_layout(height=PLOTLY_H, xaxis_title="Profondeur (µm)", yaxis_title="L2 global", legend_title="Groupe")
+                st.plotly_chart(fig_l2prof, use_container_width=True)
 
-    ax.set_xlabel("Rq idéal")
-    ax.set_ylabel("Rq réel")
-    ax.legend()
-    ax.grid()
-    st.pyplot(fig)
+            # -------------------------
+            # 6. Carte Largeur × Profondeur colorée L2
+            # -------------------------
+            st.subheader("Carte géométrie — couleur = L2")
+            fig_map = px.scatter(
+                df, x="largeur_sillon_um", y="profondeur_um", color="L2_global",
+                symbol="groupe", symbol_map={g: SYMBOL_MAP.get(g, "circle") for g in df["groupe"].unique()},
+                color_continuous_scale="YlOrRd",
+                hover_data={
+                    "fichier_court": True,
+                    "groupe": True,
+                    "largeur_sillon_um": ":.1f",
+                    "profondeur_um": ":.2f",
+                    "L2_global": ":.4f",
+                    "Ra_mesure": ":.4f",
+                    "Rq_mesure": ":.4f",
+                    "K_mesure": ":.3f",
+                },
+                labels={
+                    "largeur_sillon_um": "Largeur (µm)",
+                    "profondeur_um": "Profondeur (µm)",
+                    "L2_global": "L2",
+                    "fichier_court": "Fichier",
+                    "groupe": "Groupe",
+                },
+            )
+            fig_map.update_traces(marker=dict(size=12, line=dict(width=1, color="white")))
+            fig_map.update_layout(height=480)
+            st.plotly_chart(fig_map, use_container_width=True)
 
-    # =========================
-    # 3. Kurtosis
-    # =========================
-    st.subheader("Kurtosis vs largeur")
-
-    fig = Figure()
-    ax = fig.add_subplot(111)
-
-    for g in df["groupe"].unique():
-        sub = df[df["groupe"] == g]
-        ax.scatter(sub["largeur_sillon_um"], sub["K_mesure"], label=g)
-
-    ax.set_xlabel("Largeur (µm)")
-    ax.set_ylabel("Kurtosis")
-    ax.legend()
-    ax.grid()
-    st.pyplot(fig)
-
-    # =========================
-    # 4. L2 géométrie
-    # =========================
-    st.subheader("Géométrie vs L2")
-
-    fig = Figure()
-    ax = fig.add_subplot(111)
-
-    sc = ax.scatter(
-        df["largeur_sillon_um"],
-        df["profondeur_um"],
-        c=df["L2_global"]
-    )
-
-    fig.colorbar(sc)
-    ax.set_xlabel("Largeur")
-    ax.set_ylabel("Profondeur")
-    ax.grid()
-    st.pyplot(fig)
-
-    # =========================
-    # 5. profondeur vs L2
-    # =========================
-    st.subheader("Profondeur vs L2")
-
-    fig = Figure()
-    ax = fig.add_subplot(111)
-
-    ax.scatter(df["profondeur_um"], df["L2_global"])
-    ax.set_xlabel("Profondeur")
-    ax.set_ylabel("L2")
-    ax.grid()
-    st.pyplot(fig)
-
-    # =========================
-    # 6. largeur vs L2
-    # =========================
-    st.subheader("Largeur vs L2")
-
-    fig = Figure()
-    ax = fig.add_subplot(111)
-
-    ax.scatter(df["largeur_sillon_um"], df["L2_global"])
-    ax.set_xlabel("Largeur")
-    ax.set_ylabel("L2")
-    ax.grid()
-    st.pyplot(fig)
-
-    # =========================
-    # 7. Kurtosis en couleur
-    # # =========================
-    st.subheader("Kurtosis en fonction de la géométrie")
-
-    fig = Figure()
-    ax = fig.add_subplot(111)
-
-    sc = ax.scatter(
-        df["largeur_sillon_um"],
-        df["profondeur_um"],
-        c=df["K_mesure"]
-    )
-
-    fig.colorbar(sc)
-    ax.set_xlabel("Largeur (µm)")
-    ax.set_ylabel("Profondeur (µm)")
-    ax.grid()
-
-    st.pyplot(fig)
+            # -------------------------
+            # 7. Top kurtosis
+            # -------------------------
+            st.subheader("Top 5 kurtosis (usure outil)")
+            top_k = df.sort_values("K_mesure", ascending=False).head(5)
+            st.dataframe(
+                top_k[["fichier_court", "K_mesure", "largeur_sillon_um", "profondeur_um", "L2_global", "groupe"]]
+                .rename(columns={"fichier_court": "fichier"})
+                .reset_index(drop=True),
+                use_container_width=True,
+            )
     
 # -----------------------------
 # Tab 7: Rapport
