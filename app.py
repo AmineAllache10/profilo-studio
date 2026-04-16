@@ -307,7 +307,7 @@ with tabs[1]:
             if gridp.is_grid:
                 import plotly.express as _px_viz
                 st.caption("Comparaison entre la surface réelle mesurée et un modèle théorique de structure diamant")
-                st.caption("🔍 Zoom : sélectionner une zone · Double-clic pour réinitialiser")
+                st.caption(" Zoom : sélectionner une zone · Double-clic pour réinitialiser")
 
                 col1, col2 = st.columns(2)
 
@@ -451,7 +451,7 @@ with tabs[2]:
         st.stop()
 
     st.write(f"missing_rate = {gridm.missing_rate:.6f}")
-    st.caption("🔍 Zoom : sélectionner une zone · Double-clic pour réinitialiser")
+    st.caption(" Zoom : sélectionner une zone · Double-clic pour réinitialiser")
 
     import plotly.express as _px_miss
     c1, c2 = st.columns(2)
