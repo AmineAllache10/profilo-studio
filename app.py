@@ -483,14 +483,16 @@ with tabs[3]:
         4. FFT → détection de la période dominante
         5. Modèle créneau (diamant) + alignement par corrélation
         6. Métriques globales : Ra, Rq, Kurtosis (profil vs modèle)
-        7. Kurtosis ligne par ligne
-        8. Erreur L2 absolue et normalisée ligne par ligne
-        9. Erreurs relatives Ra / Rq / Kurtosis (profil mesuré vs modèle)
     """)
 
     if sel_row is None:
         st.info("Aucun fichier sélectionné.")
     else:
+        path = sel_row["chemin"]
+        if "PMMA" not in path:
+            st.error("Cette analyse est disponible uniquement pour les profils linéaires (PMMA).")
+            st.stop()
+
         rec_col, _ = st.columns([1, 3])
         with rec_col:
             ref0_rec = st.checkbox("Référence surface = 0", value=True, key="rec_ref0")
@@ -503,9 +505,11 @@ with tabs[3]:
             try:
                 with st.spinner("Lecture + recalage en cours..."):
                     _, g_rec = load_grid_or_scatter(sel_row)
+
                     if not g_rec.is_grid:
                         st.warning("Recalage disponible uniquement pour les fichiers en grille.")
                         st.stop()
+
                     res_rec = analyse_recalage(
                         g_rec.Z,
                         x_vals=g_rec.x_vals,
@@ -514,15 +518,17 @@ with tabs[3]:
                         period_min_px=int(period_min_rec),
                         period_max_px=int(period_max_rec),
                     )
+
                 st.session_state["recalage_res"] = res_rec
+
             except Exception as e:
                 st.error(str(e))
 
         res_rec = st.session_state.get("recalage_res", None)
+
         if res_rec is None:
             st.info("Clique sur 'Lancer recalage'.")
         else:
-            # ---- Paramètres détectés
             st.subheader("Paramètres détectés")
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Résolution (µm/px)", f"{res_rec['resolution_um_px']:.3f}")
@@ -530,9 +536,8 @@ with tabs[3]:
             col3.metric("Largeur sillon (µm)", f"{res_rec['largeur_sillon_um']:.1f}")
             col4.metric("Profondeur (µm)", f"{res_rec['profondeur_um']:.2f}")
 
-            # ---- Profil vs modèle
             st.subheader("Profil moyen vs modèle créneau")
-            # Nettoyer le profil : limites Y serrees sur les donnees valides
+
             profil_plot = res_rec["profil_det"].copy().astype(float)
             modele_plot = res_rec["modele_aligne"].copy().astype(float)
 
@@ -540,50 +545,57 @@ with tabs[3]:
                 profil_plot[np.isfinite(profil_plot)],
                 modele_plot[np.isfinite(modele_plot)],
             ])
+
             if valeurs_valides.size > 0:
-                p1  = float(np.percentile(valeurs_valides, 1))
+                p1 = float(np.percentile(valeurs_valides, 1))
                 p99 = float(np.percentile(valeurs_valides, 99))
                 marge = abs(p99 - p1) * 0.15
-                y_min_plot = p1  - marge
+                y_min_plot = p1 - marge
                 y_max_plot = p99 + marge
-                # Masquer les spikes de bord (chute brutale hors plage)
                 profil_plot[profil_plot < y_min_plot] = np.nan
             else:
                 y_min_plot, y_max_plot = None, None
 
             fig_pvm = Figure(figsize=(11, 4), dpi=120)
             ax_pvm = fig_pvm.add_subplot(111)
+
             ax_pvm.plot(
                 profil_plot,
-                label=f"Profil mesure  (Ra={res_rec['Ra']:.3f}, Rq={res_rec['Rq']:.3f}, K={res_rec['kurtosis_profil']:.2f})",
+                label=f"Profil mesure (Ra={res_rec['Ra']:.3f}, Rq={res_rec['Rq']:.3f}, K={res_rec['kurtosis_profil']:.2f})",
             )
+
             ax_pvm.plot(
                 modele_plot, "--", color="orange",
-                label=f"Modele creneau (Ra={res_rec['Ra_modele']:.3f}, Rq={res_rec['Rq_modele']:.3f}, K={res_rec['kurtosis_modele']:.2f})",
+                label=f"Modele (Ra={res_rec['Ra_modele']:.3f}, Rq={res_rec['Rq_modele']:.3f}, K={res_rec['kurtosis_modele']:.2f})",
             )
+
             if y_min_plot is not None:
                 ax_pvm.set_ylim(y_min_plot, y_max_plot)
+
             ax_pvm.set_xlabel("Index X")
             ax_pvm.set_ylabel("Profondeur (µm)")
             ax_pvm.set_title("Profil moyen vs modele aligne")
             ax_pvm.grid(True, alpha=0.4)
             ax_pvm.legend(loc="lower right")
             fig_pvm.tight_layout()
+
             st.pyplot(fig_pvm)
 
-            # ---- Métriques comparées
             st.subheader("Métriques : profil vs modèle")
             mc1, mc2, mc3 = st.columns(3)
+
             mc1.metric(
-                "Ra  mesuré / modèle (µm)",
+                "Ra mesuré / modèle (µm)",
                 f"{res_rec['Ra']:.3f} / {res_rec['Ra_modele']:.3f}",
                 delta=f"{res_rec['erreur_Ra_pct']:.1f} % d'écart",
             )
+
             mc2.metric(
-                "Rq  mesuré / modèle (µm)",
+                "Rq mesuré / modèle (µm)",
                 f"{res_rec['Rq']:.3f} / {res_rec['Rq_modele']:.3f}",
                 delta=f"{res_rec['erreur_Rq_pct']:.1f} % d'écart",
             )
+
             mc3.metric(
                 "Kurtosis moy / modèle",
                 f"{res_rec['kurtosis_moyenne']:.2f} / {res_rec['kurtosis_modele']:.2f}",
@@ -592,55 +604,11 @@ with tabs[3]:
 
             st.divider()
 
-            # ---- Kurtosis + L2 côte à côte
-            left_k, right_k = st.columns(2)
+            col_tab, col_exp = st.columns([1.2, 1])
 
-            with left_k:
-                st.subheader("Kurtosis ligne par ligne")
-                st.write(f"Kurtosis moyen : **{res_rec['kurtosis_moyenne']:.3f}** ± {res_rec['kurtosis_std']:.3f}")
-                st.write(f"Lignes analysées : **{res_rec['n_lignes']}**")
-                fig_kurt = Figure(figsize=(6, 3), dpi=110)
-                ax_k = fig_kurt.add_subplot(111)
-                ax_k.plot(res_rec["kurtosis_lignes_arr"], color="steelblue", linewidth=0.8)
-                ax_k.axhline(
-                    res_rec["kurtosis_moyenne"], color="red", linestyle="--",
-                    label=f"Moy = {res_rec['kurtosis_moyenne']:.2f}",
-                )
-                ax_k.set_xlabel("Ligne Y")
-                ax_k.set_ylabel("Kurtosis")
-                ax_k.set_title("Kurtosis par ligne")
-                ax_k.grid(True)
-                ax_k.legend()
-                fig_kurt.tight_layout()
-                st.pyplot(fig_kurt)
-
-            with right_k:
-                st.subheader("Erreur L2 ligne par ligne")
-                st.write(f"L2 absolue : **{res_rec['erreur_L2_moyenne']:.3f}** ± {res_rec['erreur_L2_std']:.3f} µm·√µm")
-                st.write(f"L2 normalisée : **{res_rec['L2_norm_moyenne']:.4f}** ± {res_rec['L2_norm_std']:.4f}")
-                fig_l2 = Figure(figsize=(6, 3), dpi=110)
-                ax_l2 = fig_l2.add_subplot(111)
-                ax_l2.plot(res_rec["erreurs_L2_arr"], color="darkorange", linewidth=0.8)
-                ax_l2.axhline(
-                    res_rec["erreur_L2_moyenne"], color="red", linestyle="--",
-                    label=f"Moy = {res_rec['erreur_L2_moyenne']:.3f}",
-                )
-                ax_l2.set_xlabel("Ligne Y")
-                ax_l2.set_ylabel("L2 (µm·√µm)")
-                ax_l2.set_title("Erreur L2 par ligne")
-                ax_l2.grid(True)
-                ax_l2.legend()
-                fig_l2.tight_layout()
-                st.pyplot(fig_l2)
-                st.divider()
-
-                # ---- Tableau recapitulatif + export CSV
+            with col_tab:
                 st.subheader("Recapitulatif des metriques")
-                 
-                dK_abs = res_rec.get(
-                    "dK",
-                    abs(res_rec["kurtosis_moyenne"] - res_rec["kurtosis_modele"])
-                )
+
                 recap = {
                     "fichier": str(sel_row["chemin"]),
                     "Ra_mesure": res_rec["Ra"],
@@ -653,10 +621,6 @@ with tabs[3]:
                     "dRq_pct": res_rec["erreur_Rq_pct"],
                     "dK_abs": res_rec["dK"],
                     "L2_global": res_rec["L2_global"],
-                    "L2_norm_moyenne": res_rec["L2_norm_moyenne"],
-                    "L2_norm_std": res_rec["L2_norm_std"],
-                    "kurtosis_moy_lignes": res_rec["kurtosis_moyenne"],
-                    "kurtosis_std_lignes": res_rec["kurtosis_std"],
                     "periode_um": res_rec["periode_um"],
                     "largeur_sillon_um": res_rec["largeur_sillon_um"],
                     "profondeur_um": res_rec["profondeur_um"],
@@ -666,43 +630,45 @@ with tabs[3]:
                 df_recap = pd.DataFrame([recap])
                 st.dataframe(df_recap.T.rename(columns={0: "Valeur"}), use_container_width=True)
 
-                # Export CSV (append)
-                csv_export_path = "resultats_profils.csv"
-                file_exists = os.path.exists(csv_export_path)
+                csv_bytes = df_recap.to_csv(index=False).encode("utf-8")
 
-                col_csv1, col_csv2 = st.columns(2)
+                st.download_button(
+                    "Télécharger CSV",
+                    data=csv_bytes,
+                    file_name="recalage_resultats.csv",
+                    mime="text/csv",
+                )
 
-                with col_csv1:
-                    if st.button("Ajouter au CSV", key="btn_csv_append"):
-                        df_recap.to_csv(
-                            csv_export_path,
-                            mode="a",
-                            header=not file_exists,
-                            index=False,
-                        )
-                        st.success(f"Ligne ajoutee dans {csv_export_path}")
+            with col_exp:
+                st.subheader("Formules")
 
-                with col_csv2:
-                    # Telechargement direct sans ecrire sur disque
-                    csv_bytes = df_recap.to_csv(index=False).encode("utf-8")
-                    st.download_button(
-                        "Telecharger CSV (cette ligne)",
-                        data=csv_bytes,
-                        file_name=f"recalage_{os.path.splitext(os.path.basename(str(sel_row['chemin'])))[0]}.csv",
-                        mime="text/csv",
-                        key="btn_csv_dl",
-                    )
+                st.markdown("Ra")
+                st.latex(r"Ra = \frac{1}{n} \sum |z_i|")
+                st.caption("Rugosité moyenne")
 
-                # Si le CSV global existe, proposer de le telecharger aussi
-                if os.path.exists(csv_export_path):
-                    with open(csv_export_path, "rb") as fcsv:
-                        st.download_button(
-                            "Telecharger resultats_profils.csv complet",
-                            data=fcsv.read(),
-                            file_name="resultats_profils.csv",
-                            mime="text/csv",
-                            key="btn_csv_global",
-                        )
+                st.divider()
+
+                st.markdown("Rq")
+                st.latex(r"Rq = \sqrt{\frac{1}{n} \sum z_i^2}")
+                st.caption("Sensibilité aux pics")
+
+                st.divider()
+
+                st.markdown("K")
+                st.latex(r"K = \frac{1}{n} \sum \left(\frac{z_i - \bar{z}}{\sigma}\right)^4")
+                st.caption("Forme des structures")
+
+                st.divider()
+
+                st.markdown("L2")
+                st.latex(r"L2 = \sqrt{\sum (z_{mes} - z_{mod})^2}")
+                st.caption("Écart global")
+
+                st.divider()
+
+                st.markdown("Erreur %")
+                st.latex(r"\left|\frac{X_{mes} - X_{mod}}{X_{mod}}\right| \times 100")
+                st.caption("Écart relatif")
 
 
 
