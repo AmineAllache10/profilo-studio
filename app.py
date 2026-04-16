@@ -23,6 +23,8 @@ from core.inventory import (
     read_xyz_points_cached,
 )
 
+from core.analysis_profils import process_image_from_grid
+
 from core.io_drive import get_drive_service, download_drive_file_to_temp
 from core.io_xyz import read_xyz_points
 
@@ -302,6 +304,7 @@ with tabs[1]:
 
         with st.spinner("Lecture complète et construction de la grille..."):
             dfp, gridp = load_grid_or_scatter(sel_row)
+        st.session_state["grid"] = gridp
 
         with left:
             if gridp.is_grid:
@@ -476,6 +479,7 @@ with tabs[2]:
 
     if do_fill:
         Z_filled = fill_missing(gridm.Z, method=method)
+        st.session_state["Z_filled"] = Z_filled
         d1, d2, d3 = st.columns(3)
         with d1:
             _f1 = _px_miss.imshow(gridm.Z, origin="lower", color_continuous_scale="viridis", aspect="auto", title="AVANT", labels={"color": "Z"})
@@ -694,95 +698,110 @@ with tabs[3]:
 
 
 
-# -----------------------------
-# Tab 5: Analyse profils
-# -----------------------------
+# ==============================
+# TAB 5 — ANALYSE PROFILS
+# ==============================
+
 with tabs[4]:
-    st.subheader("Analyse des profils (1D)")
+    import plotly.express as _px_p5
+    import plotly.graph_objects as _go_p5
 
-    st.info("""
-Réduction de dimension :
-
-La surface 2D (Z) est transformée en profils 1D pour simplifier l’analyse.
-
-Méthodologie :
-- Extraction de plusieurs lignes de la grille
-- Visualisation des profils individuels
-- Calcul d’un profil moyen
-- Analyse de la dispersion (min / max)
-""")
+    st.header("Analyse des profils")
+    st.info("🔍 Zoom : sélectionner une zone sur chaque graphe · Double-clic pour réinitialiser")
 
     if sel_row is None:
         st.info("Aucun fichier sélectionné.")
     else:
-        with st.spinner("Lecture complète..."):
-            dfP, gP = load_grid_or_scatter(sel_row)
+        if st.button("Lancer analyse profils", key="btn_analyse_profils"):
+            try:
+                with st.spinner("Calcul en cours..."):
+                    _, g_p5 = load_grid_or_scatter(sel_row)
+                    if not g_p5.is_grid:
+                        st.warning("Analyse disponible uniquement pour les fichiers en grille.")
+                    else:
+                        res_p5 = process_image_from_grid(g_p5.Z, g_p5.x_vals, g_p5.y_vals)
+                        st.session_state["profils_res"] = res_p5
+                        st.session_state["profils_Z"] = g_p5.Z
+            except Exception as e:
+                st.error(str(e))
 
-        if not gP.is_grid:
-            st.warning("Analyse profils disponible seulement si fichier en grille.")
+        res_p5 = st.session_state.get("profils_res", None)
+        Z_p5   = st.session_state.get("profils_Z", None)
+
+        if res_p5 is None:
+            st.info("Clique sur 'Lancer analyse profils'.")
         else:
-            # -----------------------------
-            # Paramètres utilisateur
-            # -----------------------------
-            colA, colB = st.columns(2)
-            with colA:
-                n_lines = st.slider("Nombre de profils affichés", 3, 30, 10)
-            with colB:
-                ref0 = st.checkbox("Centrer la surface (max = 0)", value=True)
+            profiles   = res_p5["profiles"]       # (n_profils, nx)
+            profil_det = res_p5["profil_det"]      # (nx,)
+            modele     = res_p5["modele_aligne"]   # (nx,)
+            median_fd  = res_p5["median_fd"]       # (nx,)
+            lower_fd   = res_p5["lower_fd"]        # (nx,)
+            upper_fd   = res_p5["upper_fd"]        # (nx,)
+            x_ax       = np.arange(len(profil_det))
 
-            Z = gP.Z.copy()
-
-            if ref0:
-                Z = Z - np.nanmax(Z)
-
-            ny, nx = Z.shape
-            indices = np.linspace(0, ny - 1, n_lines, dtype=int)
-
-            # -----------------------------
-            # 1. Profils individuels
-            # -----------------------------
-            fig1 = Figure(figsize=(10, 4), dpi=120)
-            ax1 = fig1.add_subplot(111)
-
-            for i in indices:
-                ax1.plot(Z[i, :], alpha=0.7)
-
-            ax1.set_title("Profils individuels")
-            ax1.set_xlabel("Position X")
-            ax1.set_ylabel("Profondeur (µm)")
-            ax1.grid(True)
-
-            st.pyplot(fig1)
-
-            # -----------------------------
-            # 2. Profil moyen + dispersion
-            # -----------------------------
-            profil_moyen = np.nanmean(Z, axis=0)
-            profil_min = np.nanmin(Z, axis=0)
-            profil_max = np.nanmax(Z, axis=0)
-
-            fig2 = Figure(figsize=(10, 4), dpi=120)
-            ax2 = fig2.add_subplot(111)
-
-            ax2.fill_between(
-                range(nx),
-                profil_min,
-                profil_max,
-                alpha=0.3,
-                label="Dispersion (min–max)"
+            # ---- 1. Surface heatmap ----
+            st.subheader("Surface (heatmap)")
+            _fig_surf = _px_p5.imshow(
+                Z_p5, origin="lower", color_continuous_scale="viridis",
+                aspect="auto", labels={"color": "Z (µm)"},
+                title="Surface mesurée",
             )
-            ax2.plot(profil_moyen, linewidth=2, label="Profil moyen")
+            _fig_surf.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(_fig_surf, use_container_width=True)
 
-            ax2.set_title("Profil moyen et dispersion")
-            ax2.set_xlabel("Position X")
-            ax2.set_ylabel("Profondeur (µm)")
-            ax2.legend()
-            ax2.grid(True)
+            # ---- 2. Recalage profil vs modèle  +  Functional boxplot (côte à côte) ----
+            col_rec, col_fbp = st.columns(2)
 
-            st.pyplot(fig2)
+            with col_rec:
+                st.subheader("Profil moyen vs modèle créneau")
+                _fig_rec = _go_p5.Figure()
+                _fig_rec.add_trace(_go_p5.Scatter(
+                    x=x_ax, y=profil_det, mode="lines", name="Profil moyen",
+                    line=dict(color="#4C72B0", width=2),
+                    hovertemplate="X=%{x}<br>Z=%{y:.3f} µm<extra>Profil moyen</extra>",
+                ))
+                _fig_rec.add_trace(_go_p5.Scatter(
+                    x=x_ax, y=modele, mode="lines", name="Modèle créneau",
+                    line=dict(color="orange", dash="dash", width=2),
+                    hovertemplate="X=%{x}<br>Z=%{y:.3f} µm<extra>Modèle</extra>",
+                ))
+                _fig_rec.update_layout(
+                    height=380, xaxis_title="Position X (px)", yaxis_title="Profondeur (µm)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    margin=dict(l=10, r=10, t=50, b=40),
+                )
+                st.plotly_chart(_fig_rec, use_container_width=True)
 
-            st.caption("Reduction : surface 2D vers profils 1D pour analyse simplifiee")
-
+            with col_fbp:
+                st.subheader("Functional Boxplot")
+                _fig_fbp = _go_p5.Figure()
+                # Bande centrale (50% des profils les plus profonds)
+                _fig_fbp.add_trace(_go_p5.Scatter(
+                    x=np.concatenate([x_ax, x_ax[::-1]]),
+                    y=np.concatenate([upper_fd, lower_fd[::-1]]),
+                    fill="toself", fillcolor="rgba(76,114,176,0.25)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    hoverinfo="skip", name="Bande centrale (50%)",
+                    showlegend=True,
+                ))
+                # Médiane fonctionnelle
+                _fig_fbp.add_trace(_go_p5.Scatter(
+                    x=x_ax, y=median_fd, mode="lines", name="Médiane fonctionnelle",
+                    line=dict(color="black", width=2),
+                    hovertemplate="X=%{x}<br>Z=%{y:.3f} µm<extra>Médiane</extra>",
+                ))
+                # Modèle
+                _fig_fbp.add_trace(_go_p5.Scatter(
+                    x=x_ax, y=modele, mode="lines", name="Modèle créneau",
+                    line=dict(color="red", dash="dash", width=1.5),
+                    hovertemplate="X=%{x}<br>Z=%{y:.3f} µm<extra>Modèle</extra>",
+                ))
+                _fig_fbp.update_layout(
+                    height=380, xaxis_title="Position X (px)", yaxis_title="Profondeur (µm)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    margin=dict(l=10, r=10, t=50, b=40),
+                )
+                st.plotly_chart(_fig_fbp, use_container_width=True)
 # -----------------------------
 # Tab 6: Analyse globale des sillons
 # -----------------------------
