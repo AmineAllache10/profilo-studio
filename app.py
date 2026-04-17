@@ -737,12 +737,25 @@ with tabs[4]:
             upper_fd   = res_p5["upper_fd"]
             x_ax       = np.arange(len(profil_det))
 
-            # Forcer pic à 0 sur profil et modèle
-            profil_plot = profil_det - np.nanmax(profil_det)
-            modele_plot = modele - np.nanmax(modele)
-            median_plot = median_fd - np.nanmax(median_fd)
-            lower_plot  = lower_fd  - np.nanmax(median_fd)
-            upper_plot  = upper_fd  - np.nanmax(median_fd)
+            # Forcer pic à 0 sur profil et modèle (percentile 98 pour éviter les chutes en bord)
+            _ref_profil  = np.nanpercentile(profil_det, 98)
+            _ref_median  = np.nanpercentile(median_fd, 98)
+            profil_plot  = profil_det - _ref_profil
+            modele_plot  = modele     - np.nanpercentile(modele, 98)
+            median_plot  = median_fd  - _ref_median
+            lower_plot   = lower_fd   - _ref_median
+            upper_plot   = upper_fd   - _ref_median
+
+            # Calcul de la plage Y utile (zoom sur les structures)
+            _ymin_profil = float(np.nanpercentile(profil_plot, 1))
+            _ymax_profil = float(np.nanpercentile(profil_plot, 99))
+            _ypad        = max(2.0, abs(_ymin_profil) * 0.15)
+            _yrange      = [_ymin_profil - _ypad, _ymax_profil + _ypad]
+
+            _ymin_fbp    = float(np.nanpercentile(lower_plot, 1))
+            _ymax_fbp    = float(np.nanpercentile(upper_plot, 99))
+            _ypad_fbp    = max(2.0, abs(_ymin_fbp) * 0.15)
+            _yrange_fbp  = [_ymin_fbp - _ypad_fbp, _ymax_fbp + _ypad_fbp]
 
             # ---- 1. Heatmap surface (Z rempli) ----
             st.subheader("Surface (après remplissage des trous)")
@@ -772,6 +785,7 @@ with tabs[4]:
                 ))
                 _fig_rec.update_layout(
                     height=380, xaxis_title="Position X (px)", yaxis_title="Profondeur (µm)",
+                    yaxis=dict(range=_yrange),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     margin=dict(l=10, r=10, t=50, b=40),
                 )
@@ -799,6 +813,7 @@ with tabs[4]:
                 ))
                 _fig_fbp.update_layout(
                     height=380, xaxis_title="Position X (px)", yaxis_title="Profondeur (µm)",
+                    yaxis=dict(range=_yrange_fbp),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     margin=dict(l=10, r=10, t=50, b=40),
                 )
