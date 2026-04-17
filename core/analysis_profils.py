@@ -36,42 +36,21 @@ def process_image_from_grid(Z, x_unique, y_unique) -> dict:
     PROFILE_STEP = 10
 
     profiles_raw = np.array([Z[i, :] for i in range(0, Z.shape[0], PROFILE_STEP)])
-
-    # garder les profils avec au moins 80% de données valides
-    valid_ratio = np.sum(np.isfinite(profiles_raw), axis=1) / profiles_raw.shape[1]
-    profiles_raw = profiles_raw[valid_ratio > 0.8]
+    # Garder seulement les profils sans NaN
+    profiles_raw = profiles_raw[~np.isnan(profiles_raw).any(axis=1)]
 
     if profiles_raw.shape[0] < 3:
         raise ValueError("Pas assez de profils valides (besoin d'au moins 3 lignes sans NaN).")
 
     def detrend(p: np.ndarray) -> np.ndarray:
         x = np.arange(len(p))
-        mask = np.isfinite(p)
-        if np.sum(mask) < 10:
-            return None
-
-        coeffs = np.polyfit(x[mask], p[mask], 1)
+        coeffs = np.polyfit(x, p, 1)
         trend = np.polyval(coeffs, x)
-
         p = p - trend
+        p -= np.max(p)
+        return p
 
-        # interpolation des NaN
-        p_interp = np.copy(p)
-        p_interp[~mask] = np.interp(x[~mask], x[mask], p[mask])
-
-        p_interp -= np.max(p_interp)
-
-        return p_interp
-
-    profiles = []
-    for p in profiles_raw:
-        dp = detrend(p)
-        if dp is not None:
-            profiles.append(dp)
-
-    profiles = np.array(profiles)
-    if profiles.shape[0] < 3:
-        raise ValueError("Pas assez de profils exploitables après nettoyage.")
+    profiles = np.array([detrend(p) for p in profiles_raw])
     profil_det = np.mean(profiles, axis=0)
 
     # ==============================

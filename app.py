@@ -480,22 +480,17 @@ with tabs[2]:
     if do_fill:
         Z_filled = fill_missing(gridm.Z, method=method)
         st.session_state["Z_filled"] = Z_filled
-        d1, d2, d3 = st.columns(3)
+        d1, d2 = st.columns(2)
         with d1:
-            _f1 = _px_miss.imshow(gridm.Z, origin="lower", color_continuous_scale="viridis", aspect="auto", title="AVANT", labels={"color": "Z"})
-            _f1.update_layout(height=320, margin=dict(l=5, r=5, t=35, b=5))
+            _f1 = _px_miss.imshow(gridm.Z, origin="lower", color_continuous_scale="viridis", aspect="auto", title="AVANT (avec trous)", labels={"color": "Z (µm)"})
+            _f1.update_layout(height=360, margin=dict(l=5, r=5, t=40, b=5))
             st.plotly_chart(_f1, use_container_width=True)
         with d2:
-            _f2 = _px_miss.imshow(Z_filled, origin="lower", color_continuous_scale="viridis", aspect="auto", title="APRÈS", labels={"color": "Z"})
-            _f2.update_layout(height=320, margin=dict(l=5, r=5, t=35, b=5))
+            _f2 = _px_miss.imshow(Z_filled, origin="lower", color_continuous_scale="viridis", aspect="auto", title="APRÈS (trous remplis)", labels={"color": "Z (µm)"})
+            _f2.update_layout(height=360, margin=dict(l=5, r=5, t=40, b=5))
             st.plotly_chart(_f2, use_container_width=True)
-        with d3:
-            diff = np.abs(Z_filled - np.where(np.isfinite(gridm.Z), gridm.Z, Z_filled))
-            _f3 = _px_miss.imshow(diff, origin="lower", color_continuous_scale="hot", aspect="auto", title="DIFF (abs)", labels={"color": "Δ"})
-            _f3.update_layout(height=320, margin=dict(l=5, r=5, t=35, b=5))
-            st.plotly_chart(_f3, use_container_width=True)
     else:
-        st.info("Active 'Appliquer remplissage' pour voir l'APRES.")
+        st.info("Active 'Appliquer remplissage' pour voir l'APRÈS.")
 
 # -----------------------------
 # Tab 4: Recalage
@@ -719,49 +714,59 @@ with tabs[4]:
                     if not g_p5.is_grid:
                         st.warning("Analyse disponible uniquement pour les fichiers en grille.")
                     else:
-                        res_p5 = process_image_from_grid(g_p5.Z, g_p5.x_vals, g_p5.y_vals)
+                        # Utilise Z rempli si disponible, sinon Z brut
+                        Z_filled_p5 = st.session_state.get("Z_filled", None)
+                        Z_pour_analyse = Z_filled_p5 if Z_filled_p5 is not None else g_p5.Z
+                        res_p5 = process_image_from_grid(Z_pour_analyse, g_p5.x_vals, g_p5.y_vals)
                         st.session_state["profils_res"] = res_p5
-                        st.session_state["profils_Z"] = g_p5.Z
+                        st.session_state["profils_Z_display"] = Z_pour_analyse
             except Exception as e:
                 st.error(str(e))
 
         res_p5 = st.session_state.get("profils_res", None)
-        Z_p5   = st.session_state.get("profils_Z", None)
+        Z_p5   = st.session_state.get("profils_Z_display", None)
 
         if res_p5 is None:
             st.info("Clique sur 'Lancer analyse profils'.")
         else:
-            profiles   = res_p5["profiles"]       # (n_profils, nx)
-            profil_det = res_p5["profil_det"]      # (nx,)
-            modele     = res_p5["modele_aligne"]   # (nx,)
-            median_fd  = res_p5["median_fd"]       # (nx,)
-            lower_fd   = res_p5["lower_fd"]        # (nx,)
-            upper_fd   = res_p5["upper_fd"]        # (nx,)
+            profiles   = res_p5["profiles"]
+            profil_det = res_p5["profil_det"]
+            modele     = res_p5["modele_aligne"]
+            median_fd  = res_p5["median_fd"]
+            lower_fd   = res_p5["lower_fd"]
+            upper_fd   = res_p5["upper_fd"]
             x_ax       = np.arange(len(profil_det))
 
-            # ---- 1. Surface heatmap ----
-            st.subheader("Surface (heatmap)")
+            # Forcer pic à 0 sur profil et modèle
+            profil_plot = profil_det - np.nanmax(profil_det)
+            modele_plot = modele - np.nanmax(modele)
+            median_plot = median_fd - np.nanmax(median_fd)
+            lower_plot  = lower_fd  - np.nanmax(median_fd)
+            upper_plot  = upper_fd  - np.nanmax(median_fd)
+
+            # ---- 1. Heatmap surface (Z rempli) ----
+            st.subheader("Surface (après remplissage des trous)")
             _fig_surf = _px_p5.imshow(
                 Z_p5, origin="lower", color_continuous_scale="viridis",
                 aspect="auto", labels={"color": "Z (µm)"},
-                title="Surface mesurée",
+                title="Surface — Z rempli",
             )
             _fig_surf.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(_fig_surf, use_container_width=True)
 
-            # ---- 2. Recalage profil vs modèle  +  Functional boxplot (côte à côte) ----
+            # ---- 2. Recalage  +  Functional boxplot côte à côte ----
             col_rec, col_fbp = st.columns(2)
 
             with col_rec:
                 st.subheader("Profil moyen vs modèle créneau")
                 _fig_rec = _go_p5.Figure()
                 _fig_rec.add_trace(_go_p5.Scatter(
-                    x=x_ax, y=profil_det, mode="lines", name="Profil moyen",
+                    x=x_ax, y=profil_plot, mode="lines", name="Profil moyen",
                     line=dict(color="#4C72B0", width=2),
                     hovertemplate="X=%{x}<br>Z=%{y:.3f} µm<extra>Profil moyen</extra>",
                 ))
                 _fig_rec.add_trace(_go_p5.Scatter(
-                    x=x_ax, y=modele, mode="lines", name="Modèle créneau",
+                    x=x_ax, y=modele_plot, mode="lines", name="Modèle créneau",
                     line=dict(color="orange", dash="dash", width=2),
                     hovertemplate="X=%{x}<br>Z=%{y:.3f} µm<extra>Modèle</extra>",
                 ))
@@ -775,24 +780,20 @@ with tabs[4]:
             with col_fbp:
                 st.subheader("Functional Boxplot")
                 _fig_fbp = _go_p5.Figure()
-                # Bande centrale (50% des profils les plus profonds)
                 _fig_fbp.add_trace(_go_p5.Scatter(
                     x=np.concatenate([x_ax, x_ax[::-1]]),
-                    y=np.concatenate([upper_fd, lower_fd[::-1]]),
+                    y=np.concatenate([upper_plot, lower_plot[::-1]]),
                     fill="toself", fillcolor="rgba(76,114,176,0.25)",
                     line=dict(color="rgba(0,0,0,0)"),
                     hoverinfo="skip", name="Bande centrale (50%)",
-                    showlegend=True,
                 ))
-                # Médiane fonctionnelle
                 _fig_fbp.add_trace(_go_p5.Scatter(
-                    x=x_ax, y=median_fd, mode="lines", name="Médiane fonctionnelle",
+                    x=x_ax, y=median_plot, mode="lines", name="Médiane fonctionnelle",
                     line=dict(color="black", width=2),
                     hovertemplate="X=%{x}<br>Z=%{y:.3f} µm<extra>Médiane</extra>",
                 ))
-                # Modèle
                 _fig_fbp.add_trace(_go_p5.Scatter(
-                    x=x_ax, y=modele, mode="lines", name="Modèle créneau",
+                    x=x_ax, y=modele_plot, mode="lines", name="Modèle créneau",
                     line=dict(color="red", dash="dash", width=1.5),
                     hovertemplate="X=%{x}<br>Z=%{y:.3f} µm<extra>Modèle</extra>",
                 ))
@@ -1115,10 +1116,56 @@ with tabs[6]:
 with tabs[7]:
     st.subheader("Dictionnaire")
 
-    st.write("- **XYZ** : fichier contenant des points (x, y, z)")
-    st.write("- **Grille** : représentation 2D de la surface")
-    st.write("- **NaN** : valeur manquante")
-    st.write("- **Interpolation** : estimation des valeurs manquantes")
-    st.write("- **FFT** : analyse des fréquences d’un signal")
-    st.write("- **Sillons** : rainures de la semelle")
-    st.write("- **Diamant** : modèle théorique des sillons")
+    st.markdown("### Données")
+    st.markdown("- **XYZ** : fichier texte contenant des triplets (x, y, z) — format brut de la profilométrie")
+    st.markdown("- **Grille** : organisation régulière des points en matrice 2D — nécessaire pour la plupart des analyses")
+    st.markdown("- **Hors-grille** : nuage de points sans structure régulière — visualisation limitée")
+    st.markdown("- **NaN** : valeur manquante (Not a Number) — point non mesuré dans la grille")
+    st.markdown("- **Taux de manquants** : proportion de NaN dans la grille (0 = complet, 1 = vide)")
+    st.markdown("- **Nearest Neighbor** : remplissage des trous par la valeur du point valide le plus proche")
+    st.markdown("- **Interpolation** : remplissage des trous par estimation continue à partir des voisins")
+
+    st.divider()
+    st.markdown("### Géométrie des sillons")
+    st.markdown("- **Sillons** : rainures périodiques gravées sur la semelle — structure en créneau répétée")
+    st.markdown("- **Diamant / PMMA** : matériau de référence utilisé pour calibrer les mesures profilométriques")
+    st.markdown("- **Période (µm)** : distance entre deux sillons consécutifs, détectée par FFT")
+    st.markdown("- **Largeur sillon (µm)** : largeur d'un sillon individuel ≈ période / 2")
+    st.markdown("- **Profondeur (µm)** : profondeur typique des sillons, estimée au percentile 5% du profil détrendé")
+    st.markdown("- **Résolution (µm/px)** : taille physique d'un pixel — calibration spatiale de l'image")
+
+    st.divider()
+    st.markdown("### Traitement du signal")
+    st.markdown("- **FFT** : Transformée de Fourier Rapide — décompose le profil en fréquences pour détecter la période dominante des sillons")
+    st.markdown("- **Profil moyen** : moyenne de toutes les lignes Y de la grille → profil 1D représentatif de la surface")
+    st.markdown("- **Detrend** : suppression de la pente globale par régression linéaire — élimine l'inclinaison résiduelle")
+    st.markdown("- **Référence surface = 0** : décalage du Z pour que le maximum soit à 0 µm — les sillons sont en dessous")
+    st.markdown("- **Modèle créneau** : signal binaire idéal reproduisant la structure des sillons (plat/creux alternés)")
+    st.markdown("- **Alignement (corrélation croisée)** : décalage du modèle pour qu'il coïncide avec le profil réel")
+
+    st.divider()
+    st.markdown("### Métriques de rugosité")
+    st.markdown("- **Ra (µm)** : rugosité arithmétique moyenne — valeur absolue moyenne des écarts au zéro")
+    st.latex(r"Ra = \frac{1}{n} \sum_{i=1}^{n} |z_i|")
+    st.markdown("- **Rq (µm)** : rugosité quadratique (RMS) — plus sensible aux pics et vallées extrêmes que Ra")
+    st.latex(r"Rq = \sqrt{\frac{1}{n} \sum_{i=1}^{n} z_i^2}")
+    st.markdown("- **Kurtosis (K)** : aplatissement de la distribution des hauteurs — K élevé = pics ou défauts ponctuels (indicateur d'usure outil)")
+    st.latex(r"K = \frac{1}{n \sigma^4} \sum_{i=1}^{n} (z_i - \bar{z})^4")
+    st.markdown("- **L2 global** : norme L2 entre profil mesuré et modèle aligné — quantifie l'\xc3\xa9cart global en µm·√µm")
+    st.latex(r"L2 = \sqrt{\sum_{i=1}^{n} (z_{mes,i} - z_{mod,i})^2 \cdot \Delta x}")
+    st.markdown("- **Erreur % (Ra, Rq, K)** : écart relatif entre mesure et modèle idéal")
+    st.latex(r"\text{Erreur} = \left|\frac{X_{mes} - X_{mod}}{X_{mod}}\right| \times 100")
+
+    st.divider()
+    st.markdown("### Analyse fonctionnelle")
+    st.markdown("- **Functional Boxplot** : généralisation du boxplot aux courbes — classe les profils par profondeur statistique (Modified Band Depth)")
+    st.markdown("- **Modified Band Depth (MBD)** : mesure à quel point un profil est central par rapport aux autres — les profils les plus centraux sont les plus représentatifs")
+    st.markdown("- **Médiane fonctionnelle** : profil le plus central selon le MBD — équivalent de la médiane pour des courbes")
+    st.markdown("- **Bande centrale (50%)** : enveloppe contenant la moitié des profils les plus centraux — analogue du box en boxplot classique")
+
+    st.divider()
+    st.markdown("### Classification des sillons")
+    st.markdown("- **Type 1 — fin peu profond** : largeur < 30 µm")
+    st.markdown("- **Type 2 — moyen profond** : 30 µm ≤ largeur ≤ 60 µm")
+    st.markdown("- **Type 3 — large profond** : largeur > 60 µm et profondeur > 11 µm")
+    st.markdown("- **Type 4 — large intermédiaire** : largeur > 60 µm et profondeur ≤ 11 µm")
