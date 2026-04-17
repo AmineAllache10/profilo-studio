@@ -51,7 +51,10 @@ def process_image_from_grid(Z, x_unique, y_unique) -> dict:
         return p
 
     profiles = np.array([detrend(p) for p in profiles_raw])
+
+    # Profil moyen normalisé : max à exactement 0
     profil_det = np.mean(profiles, axis=0)
+    profil_det = profil_det - np.max(profil_det)
 
     # ==============================
     # FFT → période + modèle
@@ -77,7 +80,10 @@ def process_image_from_grid(Z, x_unique, y_unique) -> dict:
     periode_um = float(1.0 / freqs[idx])
     periode_px = max(2, int(round(periode_um / resolution)))
     largeur_px = max(1, periode_px // 2)
-    profondeur = float(abs(np.percentile(profil_det, 5)))
+
+    # Profondeur : médiane des percentiles 5% par profil individuel
+    # (plus robuste que le percentile global sur le profil moyen bruité)
+    profondeur = float(np.median([abs(np.percentile(p, 5)) for p in profiles]))
 
     # ==============================
     # MODÈLE CRÉNEAU
@@ -114,6 +120,12 @@ def process_image_from_grid(Z, x_unique, y_unique) -> dict:
     central = sorted_profiles[:n_central]
     lower_fd = np.min(central, axis=0)
     upper_fd = np.max(central, axis=0)
+
+    # Normaliser la médiane à 0 au max
+    _ref = np.max(median_fd)
+    median_fd = median_fd - _ref
+    lower_fd  = lower_fd  - _ref
+    upper_fd  = upper_fd  - _ref
 
     return {
         "profiles":      profiles,

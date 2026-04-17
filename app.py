@@ -702,7 +702,7 @@ with tabs[4]:
     import plotly.graph_objects as _go_p5
 
     st.header("Analyse des profils")
-    st.info(" Zoom : sélectionner une zone sur chaque graphe · Double-clic pour réinitialiser")
+    st.info("🔍 Zoom : sélectionner une zone sur chaque graphe · Double-clic pour réinitialiser")
 
     if sel_row is None:
         st.info("Aucun fichier sélectionné.")
@@ -737,25 +737,21 @@ with tabs[4]:
             upper_fd   = res_p5["upper_fd"]
             x_ax       = np.arange(len(profil_det))
 
-            # Forcer pic à 0 sur profil et modèle (percentile 98 pour éviter les chutes en bord)
-            _ref_profil  = np.nanpercentile(profil_det, 98)
-            _ref_median  = np.nanpercentile(median_fd, 98)
-            profil_plot  = profil_det - _ref_profil
-            modele_plot  = modele     - np.nanpercentile(modele, 98)
-            median_plot  = median_fd  - _ref_median
-            lower_plot   = lower_fd   - _ref_median
-            upper_plot   = upper_fd   - _ref_median
+            # Les données sont déjà normalisées à 0 au max dans analysis_profils.py
+            profil_plot = profil_det          # max = 0
+            modele_plot = modele              # max = 0 (créneau entre 0 et -profondeur)
+            median_plot = median_fd           # max = 0
+            lower_plot  = lower_fd
+            upper_plot  = upper_fd
 
-            # Calcul de la plage Y utile (zoom sur les structures)
+            # Plage Y : de légèrement sous le min réel jusqu'à un peu au-dessus de 0
             _ymin_profil = float(np.nanpercentile(profil_plot, 1))
-            _ymax_profil = float(np.nanpercentile(profil_plot, 99))
-            _ypad        = max(2.0, abs(_ymin_profil) * 0.15)
-            _yrange      = [_ymin_profil - _ypad, _ymax_profil + _ypad]
+            _ypad        = max(0.5, abs(_ymin_profil) * 0.12)
+            _yrange      = [_ymin_profil - _ypad, _ypad]   # symétrique autour de 0
 
             _ymin_fbp    = float(np.nanpercentile(lower_plot, 1))
-            _ymax_fbp    = float(np.nanpercentile(upper_plot, 99))
-            _ypad_fbp    = max(2.0, abs(_ymin_fbp) * 0.15)
-            _yrange_fbp  = [_ymin_fbp - _ypad_fbp, _ymax_fbp + _ypad_fbp]
+            _ypad_fbp    = max(0.5, abs(_ymin_fbp) * 0.12)
+            _yrange_fbp  = [_ymin_fbp - _ypad_fbp, _ypad_fbp]
 
             # ---- 1. Heatmap surface (Z rempli) ----
             st.subheader("Surface (après remplissage des trous)")
