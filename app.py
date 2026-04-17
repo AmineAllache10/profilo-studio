@@ -702,7 +702,7 @@ with tabs[4]:
     import plotly.graph_objects as _go_p5
 
     st.header("Analyse des profils")
-    st.info("🔍 Zoom : sélectionner une zone sur chaque graphe · Double-clic pour réinitialiser")
+    st.info(" Zoom : sélectionner une zone sur chaque graphe · Double-clic pour réinitialiser")
 
     if sel_row is None:
         st.info("Aucun fichier sélectionné.")
