@@ -52,6 +52,12 @@ def process_image_from_grid(Z, x_unique, y_unique) -> dict:
 
     profiles = np.array([detrend(p) for p in profiles_raw])
 
+    # Clip : on écarte les profils avec des valeurs aberrantes (< -50 µm)
+    # et on plafonne chaque profil à la profondeur médiane × 2.5
+    depth_median = float(np.median([abs(np.percentile(p, 5)) for p in profiles]))
+    clip_floor = -max(depth_median * 2.5, 5.0)   # plancher adaptatif
+    profiles = np.clip(profiles, clip_floor, 0.0)
+
     # Profil moyen normalisé : max à exactement 0
     profil_det = np.mean(profiles, axis=0)
     profil_det = profil_det - np.max(profil_det)

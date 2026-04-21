@@ -91,51 +91,80 @@ with st.sidebar:
     st.session_state.source_mode = source_mode
 
     # -----------------------------
-    # Mode Local : explorateur de dossiers
+    # Mode Local : explorateur de dossiers ou upload (déploiement)
     # -----------------------------
     if source_mode == "Local":
-        st.caption("Navigue jusqu'au dossier contenant tes fichiers .xyz")
+        # Détection environnement : en déploiement cloud le home n'est pas navigable
+        _home = os.path.expanduser("~")
+        _is_deployed = not os.path.isdir(_home) or os.environ.get("STREAMLIT_CLOUD", "") != ""
 
-        # Zone de saisie du chemin
-        typed_path = st.text_input(
-            "Chemin du dossier",
-            value=st.session_state.local_root or os.path.expanduser("~"),
-            key="local_path_input",
-        )
-
-        # Autocomplétion : liste les sous-dossiers du chemin saisi
-        if typed_path and os.path.isdir(typed_path):
-            try:
-                subdirs = sorted([
-                    d for d in os.listdir(typed_path)
-                    if os.path.isdir(os.path.join(typed_path, d))
-                    and not d.startswith(".")
-                ])
-                if subdirs:
-                    chosen = st.selectbox(
-                        "Sous-dossiers disponibles",
-                        options=["(rester ici)"] + subdirs,
-                        index=0,
-                        key="subdir_select",
-                    )
-                    if chosen != "(rester ici)":
-                        typed_path = os.path.join(typed_path, chosen)
-                        st.session_state.local_root = typed_path
-
-                # Compter les .xyz dans le dossier choisi
-                n_xyz = sum(
-                    1 for _, _, fnames in os.walk(typed_path)
-                    for fn in fnames if fn.lower().endswith(".xyz")
-                )
-                st.caption(f"`{typed_path}`  —  **{n_xyz} fichiers .xyz** trouvés")
-                root = typed_path
-                st.session_state.local_root = typed_path
-            except PermissionError:
-                st.warning("Accès refusé à ce dossier.")
-                root = typed_path
+        if _is_deployed:
+            st.info("Mode déploiement : utilisez l'upload de fichiers .xyz ci-dessous.")
+            uploaded_files = st.file_uploader(
+                "Uploader vos fichiers .xyz",
+                type=["xyz"],
+                accept_multiple_files=True,
+                key="local_upload",
+            )
+            if uploaded_files:
+                # Sauvegarder dans un dossier temporaire persistant en session
+                if "upload_dir" not in st.session_state:
+                    import tempfile as _tmp
+                    st.session_state.upload_dir = _tmp.mkdtemp(prefix="profilo_upload_")
+                _udir = st.session_state.upload_dir
+                for _uf in uploaded_files:
+                    _dest = os.path.join(_udir, _uf.name)
+                    if not os.path.exists(_dest):
+                        with open(_dest, "wb") as _fout:
+                            _fout.write(_uf.read())
+                n_xyz = len([f for f in os.listdir(_udir) if f.lower().endswith(".xyz")])
+                st.caption(f"**{n_xyz} fichiers .xyz** prêts à l'analyse")
+                root = _udir
+                st.session_state.local_root = _udir
+            else:
+                root = st.session_state.get("local_root", "")
         else:
-            st.warning("Chemin invalide ou inaccessible.")
-            root = typed_path
+            st.caption("Navigue jusqu'au dossier contenant tes fichiers .xyz")
+
+            # Zone de saisie du chemin
+            typed_path = st.text_input(
+                "Chemin du dossier",
+                value=st.session_state.local_root or _home,
+                key="local_path_input",
+            )
+
+            # Autocomplétion : liste les sous-dossiers du chemin saisi
+            if typed_path and os.path.isdir(typed_path):
+                try:
+                    subdirs = sorted([
+                        d for d in os.listdir(typed_path)
+                        if os.path.isdir(os.path.join(typed_path, d))
+                        and not d.startswith(".")
+                    ])
+                    if subdirs:
+                        chosen = st.selectbox(
+                            "Sous-dossiers disponibles",
+                            options=["(rester ici)"] + subdirs,
+                            index=0,
+                            key="subdir_select",
+                        )
+                        if chosen != "(rester ici)":
+                            typed_path = os.path.join(typed_path, chosen)
+                            st.session_state.local_root = typed_path
+
+                    n_xyz = sum(
+                        1 for _, _, fnames in os.walk(typed_path)
+                        for fn in fnames if fn.lower().endswith(".xyz")
+                    )
+                    st.caption(f"`{typed_path}`  —  **{n_xyz} fichiers .xyz** trouvés")
+                    root = typed_path
+                    st.session_state.local_root = typed_path
+                except PermissionError:
+                    st.warning("Accès refusé à ce dossier.")
+                    root = typed_path
+            else:
+                st.warning("Chemin invalide ou inaccessible.")
+                root = typed_path
     else:
         root = ""
 
@@ -151,6 +180,12 @@ with st.sidebar:
         clear_inventory_cache()
         st.session_state.inventory = None
         st.success("Cache supprimé.")
+
+    # Info sur la persistance du cache
+    from core.inventory import CACHE_DIR, CACHE_FILE_DRIVE, CACHE_FILE_LOCAL
+    _cache_exists = os.path.exists(CACHE_FILE_DRIVE) or os.path.exists(CACHE_FILE_LOCAL)
+    if _cache_exists:
+        st.caption("✅ Inventaire en cache — scan automatique évité au prochain chargement.")
 
     st.divider()
     st.header("Sélection")
@@ -246,8 +281,11 @@ tabs = st.tabs(
 # -----------------------------
 with tabs[0]:
     st.subheader("Inventaire")
+    # Colonnes à afficher (on masque file_id, modifiedTime, mtime_ns, size qui sont internes)
+    _cols_hidden = {"file_id", "modifiedTime", "mtime_ns", "size"}
+    _cols_show = [c for c in f.columns if c not in _cols_hidden]
     st.dataframe(
-        f.sort_values(["missing_rate"], ascending=[False]),
+        f[_cols_show].sort_values(["missing_rate"], ascending=[False]),
         use_container_width=True,
         height=520,
     )
@@ -309,10 +347,16 @@ with tabs[1]:
         with left:
             if gridp.is_grid:
                 import plotly.express as _px_viz
-                st.caption("Comparaison entre la surface réelle mesurée et un modèle théorique de structure diamant")
-                st.caption(" Zoom : sélectionner une zone · Double-clic pour réinitialiser")
+                is_pmma = "PMMA" in str(sel_row.get("chemin", "")) or "PMMA" in str(sel_row.get("fichier", ""))
 
-                col1, col2 = st.columns(2)
+                if is_pmma:
+                    st.caption("Comparaison entre la surface réelle mesurée et un modèle théorique de structure diamant")
+                    st.caption("Zoom : sélectionner une zone · Double-clic pour réinitialiser")
+                    col1, col2 = st.columns(2)
+                else:
+                    st.caption("Zoom : sélectionner une zone · Double-clic pour réinitialiser")
+                    col1 = st.container()
+                    col2 = None
 
                 with col1:
                     _fig_mes = _px_viz.imshow(gridp.Z, origin="lower", color_continuous_scale="viridis",
@@ -320,54 +364,52 @@ with tabs[1]:
                     _fig_mes.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
                     st.plotly_chart(_fig_mes, use_container_width=True)
 
-                with col2:
-                    # Modèle théorique PMMA : créneau à la même résolution que Z
-                    ny_g, nx_g = gridp.Z.shape
+                if is_pmma and col2 is not None:
+                    with col2:
+                        # Modèle théorique PMMA : créneau à la même résolution que Z
+                        ny_g, nx_g = gridp.Z.shape
 
-                    # Période via FFT sur profil moyen (même logique que recalage)
-                    profil_tmp = np.nanmean(gridp.Z, axis=0)
-                    mask_tmp = np.isfinite(profil_tmp)
-                    profil_tmp = profil_tmp[mask_tmp]
+                        # Période via FFT sur profil moyen (même logique que recalage)
+                        profil_tmp = np.nanmean(gridp.Z, axis=0)
+                        mask_tmp = np.isfinite(profil_tmp)
+                        profil_tmp = profil_tmp[mask_tmp]
 
-                    if profil_tmp.size > 10:
-                        p = profil_tmp - np.mean(profil_tmp)
-                        fft_tmp = np.fft.rfft(p)
-                        fft_tmp[0] = 0
-                        freqs_tmp = np.fft.rfftfreq(len(p), d=1.0)
-                        with np.errstate(divide="ignore", invalid="ignore"):
-                            periods_tmp = 1.0 / freqs_tmp
-                        band = np.isfinite(periods_tmp) & (periods_tmp >= 10) & (periods_tmp <= 300)
-                        if np.any(band):
-                            idx_b = np.where(band)[0]
-                            idx_peak = idx_b[int(np.argmax(np.abs(fft_tmp[idx_b])))]
-                            periode_px = max(4, int(round(periods_tmp[idx_peak])))
+                        if profil_tmp.size > 10:
+                            p = profil_tmp - np.mean(profil_tmp)
+                            fft_tmp = np.fft.rfft(p)
+                            fft_tmp[0] = 0
+                            freqs_tmp = np.fft.rfftfreq(len(p), d=1.0)
+                            with np.errstate(divide="ignore", invalid="ignore"):
+                                periods_tmp = 1.0 / freqs_tmp
+                            band = np.isfinite(periods_tmp) & (periods_tmp >= 10) & (periods_tmp <= 300)
+                            if np.any(band):
+                                idx_b = np.where(band)[0]
+                                idx_peak = idx_b[int(np.argmax(np.abs(fft_tmp[idx_b])))]
+                                periode_px = max(4, int(round(periods_tmp[idx_peak])))
+                            else:
+                                periode_px = nx_g // 6
                         else:
                             periode_px = nx_g // 6
-                    else:
-                        periode_px = nx_g // 6
 
-                    largeur_px = max(2, periode_px // 2)
+                        largeur_px = max(2, periode_px // 2)
 
-                    # Créneau binaire : même shape que Z (ny_g x nx_g)
-                    # valeurs dans le même range que Z pour comparaison valable
-                    z_min = float(np.nanmin(gridp.Z))
-                    z_max = float(np.nanmax(gridp.Z))
+                        z_min = float(np.nanmin(gridp.Z))
+                        z_max = float(np.nanmax(gridp.Z))
 
-                    ligne_modele = np.zeros(nx_g, dtype=float)
-                    toggle = False
-                    for start in range(0, nx_g, largeur_px):
-                        end = min(start + largeur_px, nx_g)
-                        ligne_modele[start:end] = z_max if not toggle else z_min
-                        toggle = not toggle
+                        ligne_modele = np.zeros(nx_g, dtype=float)
+                        toggle = False
+                        for start in range(0, nx_g, largeur_px):
+                            end = min(start + largeur_px, nx_g)
+                            ligne_modele[start:end] = z_max if not toggle else z_min
+                            toggle = not toggle
 
-                    # Même grille que Z : motif répété sur toutes les lignes Y
-                    Z_modele = np.tile(ligne_modele, (ny_g, 1))
+                        Z_modele = np.tile(ligne_modele, (ny_g, 1))
 
-                    _fig_mod = _px_viz.imshow(Z_modele, origin="lower", color_continuous_scale="viridis",
-                                               labels={"color": "Z (µm)"}, title="Modèle théorique (sillons PMMA)", aspect="auto")
-                    _fig_mod.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
-                    st.plotly_chart(_fig_mod, use_container_width=True)
-                    st.caption(f"Période détectée : {periode_px} px · Même échelle couleur que la mesure")
+                        _fig_mod = _px_viz.imshow(Z_modele, origin="lower", color_continuous_scale="viridis",
+                                                   labels={"color": "Z (µm)"}, title="Modèle théorique (sillons PMMA)", aspect="auto")
+                        _fig_mod.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10))
+                        st.plotly_chart(_fig_mod, use_container_width=True)
+                        st.caption(f"Période détectée : {periode_px} px · Même échelle couleur que la mesure")
             else:
                 import plotly.express as _px_scatter
                 n = dfp.shape[0]
@@ -964,47 +1006,52 @@ with tabs[5]:
             st.plotly_chart(fig_k, use_container_width=True)
 
             # -------------------------
-            # 4 & 5. L2 vs géométrie (2 graphes côte à côte)
+            # 4 & 5. L2 normalisée vs géométrie (2 graphes côte à côte)
             # -------------------------
-            st.subheader("Erreur L2 vs géométrie")
+            # Normalisation : L2 / profondeur (amplitude physique du sillon)
+            epsilon = 1e-8
+            df["L2_norm"] = df["L2_global"] / (df["profondeur_um"] + epsilon)
+
+            st.subheader("Erreur L2 normalisée vs géométrie")
+            st.caption("L2 normalisée = L2 / profondeur — permet la comparaison entre sillons de profondeurs différentes")
             col_l2a, col_l2b = st.columns(2)
 
             with col_l2a:
                 fig_l2larg = go.Figure()
                 for grp, grp_df in df.groupby("groupe"):
                     fig_l2larg.add_trace(go.Scatter(
-                        x=grp_df["largeur_sillon_um"], y=grp_df["L2_global"],
+                        x=grp_df["largeur_sillon_um"], y=grp_df["L2_norm"],
                         mode="markers", name=grp,
                         marker=dict(color=COLOR_MAP.get(grp), symbol=SYMBOL_MAP.get(grp), size=10, line=dict(width=1, color="white")),
-                        customdata=grp_df[["fichier_court", "groupe", "largeur_sillon_um", "L2_global", "profondeur_um"]].values,
+                        customdata=grp_df[["fichier_court", "groupe", "largeur_sillon_um", "L2_norm", "profondeur_um"]].values,
                         hovertemplate=(
                             HOVER_BASE +
                             "Largeur : %{customdata[2]:.1f} µm<br>"
-                            "L2 : %{customdata[3]:.4f}<br>"
+                            "L2 norm : %{customdata[3]:.4f}<br>"
                             "Profondeur : %{customdata[4]:.2f} µm"
                             "<extra></extra>"
                         ),
                     ))
-                fig_l2larg.update_layout(height=PLOTLY_H, xaxis_title="Largeur (µm)", yaxis_title="L2 global", legend_title="Groupe", showlegend=False)
+                fig_l2larg.update_layout(height=PLOTLY_H, xaxis_title="Largeur (µm)", yaxis_title="L2 normalisée", legend_title="Groupe", showlegend=False)
                 st.plotly_chart(fig_l2larg, use_container_width=True)
 
             with col_l2b:
                 fig_l2prof = go.Figure()
                 for grp, grp_df in df.groupby("groupe"):
                     fig_l2prof.add_trace(go.Scatter(
-                        x=grp_df["profondeur_um"], y=grp_df["L2_global"],
+                        x=grp_df["profondeur_um"], y=grp_df["L2_norm"],
                         mode="markers", name=grp,
                         marker=dict(color=COLOR_MAP.get(grp), symbol=SYMBOL_MAP.get(grp), size=10, line=dict(width=1, color="white")),
-                        customdata=grp_df[["fichier_court", "groupe", "profondeur_um", "L2_global", "largeur_sillon_um"]].values,
+                        customdata=grp_df[["fichier_court", "groupe", "profondeur_um", "L2_norm", "largeur_sillon_um"]].values,
                         hovertemplate=(
                             HOVER_BASE +
                             "Profondeur : %{customdata[2]:.2f} µm<br>"
-                            "L2 : %{customdata[3]:.4f}<br>"
+                            "L2 norm : %{customdata[3]:.4f}<br>"
                             "Largeur : %{customdata[4]:.1f} µm"
                             "<extra></extra>"
                         ),
                     ))
-                fig_l2prof.update_layout(height=PLOTLY_H, xaxis_title="Profondeur (µm)", yaxis_title="L2 global", legend_title="Groupe")
+                fig_l2prof.update_layout(height=PLOTLY_H, xaxis_title="Profondeur (µm)", yaxis_title="L2 normalisée", legend_title="Groupe")
                 st.plotly_chart(fig_l2prof, use_container_width=True)
 
             # -------------------------
@@ -1067,44 +1114,113 @@ with tabs[6]:
         )
 
         if st.button("Générer ZIP rapport"):
-            with st.spinner("Génération..."):
+            with st.spinner("Génération du rapport complet..."):
                 with tempfile.TemporaryDirectory() as td:
+
+                    # ---- 1. Inventaire filtré ----
                     f.to_csv(os.path.join(td, "inventaire_filtre.csv"), index=False)
 
+                    # ---- 2. Données du fichier actif ----
                     dfR, gR = load_grid_or_scatter(sel_row)
                     base = os.path.splitext(os.path.basename(str(sel_row["chemin"])))[0]
 
                     if gR.is_grid:
-                        statsR = pd.DataFrame(
-                            [
-                                {
-                                    "fichier": os.path.basename(str(sel_row["chemin"])),
-                                    "chemin": str(sel_row["chemin"]),
-                                    "n_points": int(dfR.shape[0]),
-                                    "is_grid": bool(gR.is_grid),
-                                    "nx": int(gR.nx),
-                                    "ny": int(gR.ny),
-                                    "missing_rate": float(gR.missing_rate),
-                                    "z_min": float(np.nanmin(gR.Z)),
-                                    "z_max": float(np.nanmax(gR.Z)),
-                                    "z_mean": float(np.nanmean(gR.Z)),
-                                    "z_std": float(np.nanstd(gR.Z)),
-                                }
-                            ]
-                        )
+                        # Stats de base
+                        statsR = pd.DataFrame([{
+                            "fichier": os.path.basename(str(sel_row["chemin"])),
+                            "chemin": str(sel_row["chemin"]),
+                            "n_points": int(dfR.shape[0]),
+                            "is_grid": bool(gR.is_grid),
+                            "nx": int(gR.nx),
+                            "ny": int(gR.ny),
+                            "missing_rate": float(gR.missing_rate),
+                            "z_min": float(np.nanmin(gR.Z)),
+                            "z_max": float(np.nanmax(gR.Z)),
+                            "z_mean": float(np.nanmean(gR.Z)),
+                            "z_std": float(np.nanstd(gR.Z)),
+                        }])
                         statsR.to_csv(os.path.join(td, f"{base}_stats.csv"), index=False)
 
+                        # Surface + masque manquants
                         fig1 = fig_heatmap(gR.Z, title=f"{base} - surface")
                         fig1.savefig(os.path.join(td, f"{base}_surface.png"), format="png")
 
                         fig2 = fig_mask(gR.missing_mask, title=f"{base} - masque manquants")
                         fig2.savefig(os.path.join(td, f"{base}_missing_mask.png"), format="png")
 
+                        # Surface remplie (si demandé)
                         if do_fill_rep:
                             Zf = fill_missing(gR.Z, method_rep)
                             fig3 = fig_heatmap(Zf, title=f"{base} - surface apres fill ({method_rep})")
                             fig3.savefig(os.path.join(td, f"{base}_surface_filled.png"), format="png")
 
+                    # ---- 3. Résultats recalage (si disponibles en session) ----
+                    res_rec_zip = st.session_state.get("recalage_res", None)
+                    if res_rec_zip is not None:
+                        recap_rec = {k: v for k, v in res_rec_zip.items()
+                                     if not isinstance(v, np.ndarray)}
+                        pd.DataFrame([recap_rec]).to_csv(
+                            os.path.join(td, f"{base}_recalage.csv"), index=False
+                        )
+                        # Graphe profil vs modèle
+                        from matplotlib.figure import Figure as _Fig
+                        fig_r = _Fig(figsize=(10, 4))
+                        ax_r = fig_r.add_subplot(111)
+                        ax_r.plot(res_rec_zip["profil_det"], label="Profil mesuré")
+                        ax_r.plot(res_rec_zip["modele_aligne"], "--", color="orange", label="Modèle créneau")
+                        ax_r.set_xlabel("Index X")
+                        ax_r.set_ylabel("Profondeur (µm)")
+                        ax_r.set_title("Profil moyen vs modèle aligné")
+                        ax_r.legend()
+                        ax_r.grid(alpha=0.4)
+                        fig_r.tight_layout()
+                        fig_r.savefig(os.path.join(td, f"{base}_profil_vs_modele.png"), format="png")
+
+                    # ---- 4. Analyse profils / functional boxplot (si disponibles) ----
+                    res_p5_zip = st.session_state.get("profils_res", None)
+                    Z_p5_zip   = st.session_state.get("profils_Z_display", None)
+                    if res_p5_zip is not None:
+                        from matplotlib.figure import Figure as _Fig2
+                        # Graphe boxplot fonctionnel
+                        fig_bp = _Fig2(figsize=(10, 4))
+                        ax_bp = fig_bp.add_subplot(111)
+                        x_ax_zip = np.arange(len(res_p5_zip["median_fd"]))
+                        ax_bp.fill_between(x_ax_zip, res_p5_zip["lower_fd"], res_p5_zip["upper_fd"],
+                                           alpha=0.3, color="#4C72B0", label="Bande centrale 50%")
+                        ax_bp.plot(x_ax_zip, res_p5_zip["median_fd"], color="black", lw=2, label="Médiane fonctionnelle")
+                        ax_bp.plot(x_ax_zip, res_p5_zip["modele_aligne"], "--", color="red", lw=1.5, label="Modèle créneau")
+                        ax_bp.set_xlabel("Position X (px)")
+                        ax_bp.set_ylabel("Profondeur (µm)")
+                        ax_bp.set_title("Functional Boxplot")
+                        ax_bp.legend()
+                        ax_bp.grid(alpha=0.4)
+                        fig_bp.tight_layout()
+                        fig_bp.savefig(os.path.join(td, f"{base}_functional_boxplot.png"), format="png")
+
+                        # Graphe profil moyen vs modèle
+                        fig_pm = _Fig2(figsize=(10, 4))
+                        ax_pm = fig_pm.add_subplot(111)
+                        ax_pm.plot(x_ax_zip, res_p5_zip["profil_det"], color="#4C72B0", label="Profil moyen")
+                        ax_pm.plot(x_ax_zip, res_p5_zip["modele_aligne"], "--", color="orange", label="Modèle créneau")
+                        ax_pm.set_xlabel("Position X (px)")
+                        ax_pm.set_ylabel("Profondeur (µm)")
+                        ax_pm.set_title("Profil moyen vs modèle")
+                        ax_pm.legend()
+                        ax_pm.grid(alpha=0.4)
+                        fig_pm.tight_layout()
+                        fig_pm.savefig(os.path.join(td, f"{base}_profil_moyen.png"), format="png")
+
+                        if Z_p5_zip is not None:
+                            fig_sz = fig_heatmap(Z_p5_zip, title=f"{base} - surface (analyse profils)")
+                            fig_sz.savefig(os.path.join(td, f"{base}_surface_analyse.png"), format="png")
+
+                    # ---- 5. Résultats globaux (CSV agrégé si disponible) ----
+                    csv_path_zip = "resultats_profils.csv"
+                    if os.path.exists(csv_path_zip):
+                        import shutil
+                        shutil.copy(csv_path_zip, os.path.join(td, "resultats_profils_global.csv"))
+
+                    # ---- Création du ZIP ----
                     zip_path = os.path.join(td, "rapport_profilo.zip")
                     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                         for dirpath, _, filenames in os.walk(td):
