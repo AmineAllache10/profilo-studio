@@ -185,7 +185,7 @@ with st.sidebar:
     from core.inventory import CACHE_DIR, CACHE_FILE_DRIVE, CACHE_FILE_LOCAL
     _cache_exists = os.path.exists(CACHE_FILE_DRIVE) or os.path.exists(CACHE_FILE_LOCAL)
     if _cache_exists:
-        st.caption("✅ Inventaire en cache — scan automatique évité au prochain chargement.")
+        st.caption(" Inventaire en cache — scan automatique évité au prochain chargement.")
 
     st.divider()
     st.header("Sélection")
